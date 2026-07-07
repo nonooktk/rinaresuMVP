@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+/* ===== りなれす デザイントークン ===== */
+:root {
+  /* ピンク基調のパステル */
+  --pink-50: #fff0f6;
+  --pink-100: #ffe0ec;
+  --pink-200: #ffc2d9;
+  --pink-300: #ffa0c4;
+  --pink-400: #ff87b2;
+  --pink-500: #ff5c95;
+  --pink-600: #f43f84;
+
+  --accent: #7c6cff; /* サブアクセント（紫寄り） */
+  --gold: #ffd24c;
+
+  --ink: #5a3a4a; /* 文字色（濃いめのローズ） */
+  --ink-soft: #8a6b78;
+
+  --frame-bg: #fffafc; /* スマホ枠の背景 */
+}
+
+@theme inline {
+  --font-sans: var(--font-rounded);
+  --color-pink-400: var(--pink-400);
+  --color-pink-500: var(--pink-500);
+  --color-ink: var(--ink);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-rounded), "Hiragino Maru Gothic ProN", "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* 縦型スマホの外側グラデーション背景 */
+  background: linear-gradient(160deg, #ffd9e8 0%, #e7d6ff 55%, #d6f0ff 100%);
+}
+
+/* ===== キラキラ・アニメーション ===== */
+
+/* ふわふわ浮く（タイトルロゴ用） */
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(1deg);
+  }
+}
+.animate-floaty {
+  animation: floaty 3.5s ease-in-out infinite;
+}
+
+/* きらめき（スパークル） */
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.animate-twinkle {
+  animation: twinkle 2s ease-in-out infinite;
+}
+
+/* ボタン押下でぷにっと */
+@keyframes pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.94);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ダイアログ登場 */
+@keyframes dialogIn {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-dialog-in {
+  animation: dialogIn 0.25s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+
+/* トースト登場 */
+@keyframes toastIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+.animate-toast-in {
+  animation: toastIn 0.25s ease-out;
+}
+
+/* 選択中カードのふわ光り */
+@keyframes glowPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--pink-400), 0 0 16px 2px rgba(255, 135, 178, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--pink-500), 0 0 26px 6px rgba(255, 135, 178, 0.9);
+  }
+}
+.animate-glow {
+  animation: glowPulse 1.6s ease-in-out infinite;
+}
+
+/* スクロールバーを控えめに */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pink-200) transparent;
+}

@@ -1,0 +1,9 @@
+# Docker ビルドコンテキストから除外する対象。
+# node_modules はイメージ内で npm ci により再構築する。
+# .next はビルドステージで生成するため除外。.env* は秘匿値混入防止のため除外。
+node_modules/
+.next/
+.env
+.env.*
+npm-debug.log*
+.git/

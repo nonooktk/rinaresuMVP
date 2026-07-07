@@ -1,0 +1,34 @@
+# --- Python (backend) ---
+backend/venv/
+__pycache__/
+*.pyc
+
+# ローカル実行時の生成物（DB・アップロード写真・伝票PDF）
+backend/data/
+
+# --- Node (frontend) ---
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+
+# 環境変数ファイル（コミット禁止。サンプルは .env.local.example を参照）
+.env
+.env.*
+!.env.local.example
+
+# --- macOS / エディタ ---
+.DS_Store
+
+# iCloud 同期が生む重複ファイル（「名前 2」形式）
+* [0-9]
+* [0-9]/
+
+# --- 素材原本（アプリが使う透過済み画像は frontend/public/idols/ にコミット済み） ---
+photos/
+
+# --- Claude Code ローカル設定 ---
+.claude/
+
+# --- 公開リポジトリに含めないドキュメント（ユーザー指定） ---
+CLAUDE.md
+都市鉱山回収促進アプリ_RFP_ver1.docx

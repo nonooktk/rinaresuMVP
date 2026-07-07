@@ -1,0 +1,9 @@
+# Docker ビルドコンテキストから除外する対象。
+# venv はローカル(Windows)用なので含めない。data はマウントで供給するため除外。
+venv/
+data/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.*
