@@ -144,9 +144,18 @@ class FaqAskIn(BaseModel):
 class FaqAskOut(BaseModel):
     answer: str
     matched: bool
+    # 回答の生成方法（"ai" or "keyword"）。フロントは無視して良い後方互換フィールド。
+    generated_by: str = "keyword"
 
 
-# ---------- Dev ----------
+# ---------- Share（シェア投稿文面） ----------
+class ShareTextOut(BaseModel):
+    text: str
+    # "ai"（Azure OpenAI 生成）または "template"（フォールバック）
+    generated_by: str
+
+
+# ---------- Dev / 受領 ----------
 class ReceiveResult(BaseModel):
     points_added: int
     new_points: int

@@ -89,4 +89,18 @@ export interface FaqTopic {
 export interface FaqAnswer {
   answer: string;
   matched: boolean;
+  generated_by?: string; // "ai" or "keyword"（後方互換の任意フィールド）
+}
+
+// 検収完了（受領）結果
+export interface ReceiveResult {
+  points_added: number;
+  new_points: number;
+  new_rank: number;
+}
+
+// シェア投稿文面
+export interface ShareText {
+  text: string;
+  generated_by: string; // "ai" or "template"
 }

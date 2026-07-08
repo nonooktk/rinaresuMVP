@@ -13,6 +13,8 @@ import type {
   GoogleAuthResult,
   HistoryResult,
   Idol,
+  ReceiveResult,
+  ShareText,
   Shipment,
   User,
 } from "./types";
@@ -146,6 +148,14 @@ export const api = {
 
   // 11. 伝票PDFのURL（GETで開く用。実データ取得はブラウザに任せる）
   shipmentPdfUrl: (id: string) => `${API_BASE}/api/shipments/${id}/pdf`,
+
+  // 11b. 検収完了（自分の送付を受領扱いにしポイント付与・ランク再計算）
+  receiveShipment: (id: string) =>
+    request<ReceiveResult>(`/api/shipments/${id}/receive`, { method: "POST" }),
+
+  // 11c. シェア投稿文面の取得（受領済みのみ。AI生成 or テンプレ）
+  getShareText: (id: string) =>
+    request<ShareText>(`/api/shipments/${id}/share-text`),
 
   // 12. 履歴
   getHistory: (id: string) =>

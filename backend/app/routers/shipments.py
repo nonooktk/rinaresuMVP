@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Device, Shipment, User
-from app.schemas import ShipmentCreate, ShipmentCreateOut
+from app.schemas import (
+    ReceiveResult,
+    ShareTextOut,
+    ShipmentCreate,
+    ShipmentCreateOut,
+)
+from app.services.receiving import receive_shipment_core
+from app.services.share_text import build_share_text
 from app.services.slip_pdf import generate_slip_pdf
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
@@ -72,6 +79,62 @@ def create_shipment(
         total_points=total_points,
         device_count=len(devices),
     )
+
+
+@router.post("/{shipment_id}/receive", response_model=ReceiveResult)
+def receive_own_shipment(
+    shipment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    自分の送付物の検収完了（受領）処理を行う。
+
+    りなれすに端末が届いたことをユーザー自身が確認して押す想定のエンドポイント。
+    受領処理の中核（devices/shipment を received に・ポイント加算・ランク再計算）は
+    services/receiving.py に共通化しており、開発用 API と同じ挙動。
+
+    - 他人の送付、または存在しない送付は 404（存在秘匿のため区別しない）
+    - 受領済みは 400
+    """
+    shipment = db.get(Shipment, shipment_id)
+    # 本人の送付でなければ、存在自体を伏せて 404 を返す
+    if shipment is None or shipment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="送付が見つかりません",
+        )
+
+    return receive_shipment_core(shipment, db)
+
+
+@router.get("/{shipment_id}/share-text", response_model=ShareTextOut)
+def get_shipment_share_text(
+    shipment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    受領済み送付物のシェア投稿文面を生成して返す。
+
+    - 他人の送付、または存在しない送付は 404
+    - 未受領（received 以外）の送付は 400（受領後の達成感を投稿する導線のため）
+    - Azure OpenAI が使えれば AI 生成、失敗・未設定ならテンプレにフォールバック
+    """
+    shipment = db.get(Shipment, shipment_id)
+    if shipment is None or shipment.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="送付が見つかりません",
+        )
+    if shipment.status != "received":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="受領済みの送付のみシェアできます",
+        )
+
+    text, generated_by = build_share_text(shipment, current_user, db)
+    return ShareTextOut(text=text, generated_by=generated_by)
 
 
 @router.get("/{shipment_id}/pdf")

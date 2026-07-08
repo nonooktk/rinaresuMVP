@@ -26,6 +26,13 @@ def ask_faq(
     current_user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
-    """質問文からキーワードマッチでFAQ回答を返す。X-User-Idがあれば{nickname}置換する。"""
-    answer, matched = answer_question(payload.question, db, current_user)
-    return FaqAskOut(answer=answer, matched=matched)
+    """
+    質問文への FAQ 回答を返す。
+
+    Azure OpenAI が使える場合は推しのペルソナ・あだ名を反映した自然な回答、
+    未設定・失敗時は従来のキーワードマッチ（X-User-Id があれば{nickname}置換）。
+    """
+    answer, matched, generated_by = answer_question(
+        payload.question, db, current_user
+    )
+    return FaqAskOut(answer=answer, matched=matched, generated_by=generated_by)

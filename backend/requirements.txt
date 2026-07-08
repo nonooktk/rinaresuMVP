@@ -8,3 +8,7 @@ qrcode[pil]==7.4.2
 psycopg2-binary==2.9.10
 google-auth==2.35.0
 requests==2.32.3
+openai==1.54.4
+# openai 1.54.x は httpx に proxies= を渡すため、それを廃止した httpx 0.28 系と非互換。
+# 0.27 系に固定して回避する。
+httpx==0.27.2
