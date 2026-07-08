@@ -52,7 +52,9 @@ async def classify_device(
     with open(saved_path, "wb") as f:
         f.write(file_bytes)
 
-    candidates = classifier.classify(file_bytes, original_name, db)
+    candidates, generated_by = classifier.classify_with_source(
+        file_bytes, original_name, db
+    )
 
     return ClassifyResult(
         photo_id=saved_filename,
@@ -66,6 +68,7 @@ async def classify_device(
             }
             for c in candidates
         ],
+        generated_by=generated_by,
     )
 
 

@@ -86,6 +86,9 @@ class ClassifyResult(BaseModel):
     photo_id: str
     photo_url: str
     candidates: list[DeviceCandidate]
+    # 判定手段（"ai": gpt-4o Vision / "mock": フォールバック）。
+    # フロントは無視して良い後方互換フィールド。
+    generated_by: str = "mock"
 
 
 class DeviceCreate(BaseModel):
