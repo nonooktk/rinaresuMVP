@@ -6,6 +6,10 @@ __pycache__/
 # ローカル実行時の生成物（DB・アップロード写真・伝票PDF）
 backend/data/
 
+# 画像判定 精度検証ハーネスの入力画像・出力結果（フリー素材の再配布回避・結果はローカル管理）
+backend/eval/test_images/
+backend/eval/results/
+
 # --- Node (frontend) ---
 frontend/node_modules/
 frontend/.next/
