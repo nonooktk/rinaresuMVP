@@ -5,10 +5,14 @@ import type { MetadataRoute } from "next";
 // /manifest.webmanifest として配信され、<link rel="manifest"> も自動注入される。
 export default function manifest(): MetadataRoute.Manifest {
   return {
+    // アプリの一意識別子（start_url とは独立に固定。将来 start_url を変えても同一アプリと認識される）
+    id: "/",
     name: "りなれす",
     short_name: "りなれす",
     // 既存の layout.tsx metadata.description と揃える
     description: "推しと一緒に、おうちの都市鉱山をリサイクル。りなれす MVP",
+    // アプリの主言語（html lang="ja" と一致）
+    lang: "ja",
     start_url: "/",
     display: "standalone",
     orientation: "portrait",
