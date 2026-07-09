@@ -1,0 +1,22 @@
+# 署名キー・認証情報（秘匿・コミット禁止）
+signing/
+*.keystore
+*.jks
+
+# ビルド成果物（APK/AAB/署名補助）
+*.apk
+*.aab
+*.apks
+*.idsig
+
+# Gradle / Android ビルド生成物
+.gradle/
+build/
+app/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
