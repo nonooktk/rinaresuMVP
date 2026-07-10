@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "jp.rinaresu.app",
+      "sha256_cert_fingerprints": [
+        "D2:52:11:DE:8B:10:9D:23:A2:EC:F1:5B:26:15:90:96:8E:79:EF:FC:1B:1A:2F:86:7F:ED:84:2D:A2:A5:F2:8A"
+      ]
+    }
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "packageId": "jp.rinaresu.app",
+  "host": "ca-rinaresu-web.happywater-4b65aee9.japaneast.azurecontainerapps.io",
+  "name": "りなれす",
+  "launcherName": "りなれす",
+  "display": "standalone",
+  "themeColor": "#FF87B2",
+  "themeColorDark": "#000000",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#000000",
+  "navigationDividerColorDark": "#000000",
+  "backgroundColor": "#FFD9E8",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://ca-rinaresu-web.happywater-4b65aee9.japaneast.azurecontainerapps.io/icons/icon-512.png",
+  "maskableIconUrl": "https://ca-rinaresu-web.happywater-4b65aee9.japaneast.azurecontainerapps.io/icons/icon-maskable-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./signing/android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "3",
+  "appVersionCode": 3,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://ca-rinaresu-web.happywater-4b65aee9.japaneast.azurecontainerapps.io/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "minSdkVersion": 21,
+  "orientation": "portrait",
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "displayOverride": [],
+  "appVersion": "3"
+}
