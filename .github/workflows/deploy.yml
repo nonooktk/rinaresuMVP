@@ -1,0 +1,152 @@
+# 本番デプロイ CI（rinaresu/CLAUDE.md「再デプロイ」節を CI 化）。
+# ACR でイメージをビルドし、Container Apps のイメージ参照をダイジェスト固定で更新する。
+# 認証は Azure OIDC（federated credential）。creds JSON 方式は使わない。
+#
+# サードパーティ Action は完全長コミット SHA に固定する（行末コメントに対応バージョン）。
+name: deploy
+
+on:
+  # 手動デプロイ（タグを指定。例: v8）
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "イメージタグ（例: v8）。未指定時は sha-<短縮SHA> を自動採番"
+        required: false
+        type: string
+  # main への backend/frontend 変更で自動デプロイ
+  push:
+    branches: [main]
+    paths:
+      - backend/**
+      - frontend/**
+
+# 同時デプロイを禁止（Container App の単一レプリカ前提・整合性確保）。
+# 進行中のデプロイは中断せず、後続をキューイングする。
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+# OIDC トークン発行に id-token: write が必須
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR: acrrinaresua37c
+  RESOURCE_GROUP: rg-001-gen12
+  API_APP: ca-rinaresu-api
+  WEB_APP: ca-rinaresu-web
+  API_REPO: rinaresu-api
+  WEB_REPO: rinaresu-web
+  # フロントはビルド時に NEXT_PUBLIC_* を埋め込む必要がある（両方必須）
+  NEXT_PUBLIC_API_BASE: https://ca-rinaresu-api.happywater-4b65aee9.japaneast.azurecontainerapps.io
+  NEXT_PUBLIC_GOOGLE_CLIENT_ID: 39205794623-c6r088k3pchlajvbt2kvtse8daec7iqk.apps.googleusercontent.com
+
+jobs:
+  deploy:
+    name: build & deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    # 本番デプロイは environment 経由にし、必要に応じて required reviewers 等の保護を GitHub 側で設定する。
+    # 【重要】environment を指定すると OIDC の subject が
+    #   repo:<owner>/<repo>:environment:production
+    # に変わる。Azure 側の federated credential は必ずこの subject に一致させて登録すること
+    # （branch 用 subject のままだと AADSTS700213 等でログインに失敗する）。
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # タグを決定。ユーザー入力はシェルへ直接展開せず env 経由で受け取り、
+      # 許可文字（英数と . _ - のみ・先頭は英数・最大128文字）で検証する。
+      # 不正な入力（例: 'v8"; rm -rf /'）は fail させてインジェクションを防ぐ。
+      - name: resolve image tag
+        id: tag
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          if [ -n "$TAG_INPUT" ]; then
+            if ! printf '%s' "$TAG_INPUT" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
+              echo "::error::不正なタグ形式です（英数/._- のみ・先頭英数・最大128文字）: $TAG_INPUT"
+              exit 1
+            fi
+            echo "value=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+          else
+            # push 時は追跡可能な自動タグ（GITHUB_SHA は 40 桁の hex で安全）
+            echo "value=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Azure OIDC ログイン（federated credential。client/tenant/subscription は secrets 参照）
+      - name: Azure login (OIDC)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # API イメージを ACR でビルドし、ビルド成果のダイジェストを取得する。
+      # タグは移動・上書きされ得るため、デプロイはダイジェスト（sha256:...）参照で固定する。
+      - name: build api image & resolve digest
+        id: api
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          az acr build -r "$ACR" -t "$API_REPO:$TAG" ./backend
+          DIGEST=$(az acr repository show --image "$API_REPO:$TAG" -n "$ACR" --query digest -o tsv)
+          echo "api イメージ digest=$DIGEST"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # Web イメージを ACR でビルド（NEXT_PUBLIC_* を build-arg で埋め込む）→ ダイジェスト取得
+      - name: build web image & resolve digest
+        id: web
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          az acr build -r "$ACR" -t "$WEB_REPO:$TAG" \
+            --build-arg NEXT_PUBLIC_API_BASE="$NEXT_PUBLIC_API_BASE" \
+            --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID="$NEXT_PUBLIC_GOOGLE_CLIENT_ID" \
+            ./frontend
+          DIGEST=$(az acr repository show --image "$WEB_REPO:$TAG" -n "$ACR" --query digest -o tsv)
+          echo "web イメージ digest=$DIGEST"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # Container Apps のイメージ参照をダイジェスト固定で更新（新リビジョンが自動作成される）
+      - name: update api container app
+        env:
+          DIGEST: ${{ steps.api.outputs.digest }}
+        run: |
+          az containerapp update -n "$API_APP" -g "$RESOURCE_GROUP" \
+            --image "$ACR.azurecr.io/$API_REPO@$DIGEST"
+
+      - name: update web container app
+        env:
+          DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          az containerapp update -n "$WEB_APP" -g "$RESOURCE_GROUP" \
+            --image "$ACR.azurecr.io/$WEB_REPO@$DIGEST"
+
+      # 簡易ヘルスチェック: 各アプリの最新リビジョンが Healthy になるまで待ち、
+      # 一定時間内に Healthy にならなければデプロイを失敗扱いにする。
+      - name: health check (最新リビジョンの Healthy 確認)
+        run: |
+          for app in "$API_APP" "$WEB_APP"; do
+            ok=""
+            # 反映に時間がかかるため最大 10 回（約 2.5 分）リトライする
+            for i in $(seq 1 10); do
+              STATE=$(az containerapp revision list -n "$app" -g "$RESOURCE_GROUP" \
+                --query "reverse(sort_by([].{t:properties.createdTime,h:properties.healthState}, &t))[0].h" -o tsv)
+              echo "[$app] try $i: healthState=$STATE"
+              if [ "$STATE" = "Healthy" ]; then
+                ok="1"; break
+              fi
+              sleep 15
+            done
+            if [ -z "$ok" ]; then
+              echo "::error::$app の最新リビジョンが Healthy になりませんでした"
+              exit 1
+            fi
+          done
+
+      - name: deployed
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          echo "デプロイ完了: tag=$TAG / api@${{ steps.api.outputs.digest }} / web@${{ steps.web.outputs.digest }}"
