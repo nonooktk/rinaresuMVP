@@ -1,0 +1,70 @@
+# Snyk による依存脆弱性の CI ゲート（F-4 の恒常化）。
+# high 以上の既知脆弱性が混入した場合に CI を失敗させ、マージをブロックする。
+# 参考手法: Classmethod「Snyk + GitHub Actions で脆弱なパッケージの混入を CI で防ぐ」。
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同一ブランチの古い実行はキャンセルして無駄な実行を減らす
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # フロントエンド（npm）の依存を Snyk でスキャン
+  frontend:
+    name: Snyk (frontend / npm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # ロックファイルどおりに依存を再現（Snyk の解決精度を上げる）
+      - name: install deps
+        working-directory: frontend
+        run: npm ci
+
+      # high 以上で失敗（マージ不可）。moderate 以下は許容する。
+      - name: Snyk test (frontend)
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --file=frontend/package.json --severity-threshold=high
+
+  # バックエンド（pip）の依存を Snyk CLI でスキャン
+  backend:
+    name: Snyk (backend / pip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Snyk の pip スキャンはインストール済み環境があると解決精度が上がるため、
+      # 先に依存を導入してから requirements.txt を対象にスキャンする。
+      - name: install deps
+        run: pip install -r backend/requirements.txt
+
+      # Snyk CLI を利用（monorepo でパスを明示できるため確実）。
+      - name: install snyk cli
+        run: npm i -g snyk
+
+      # high 以上で失敗（マージ不可）。
+      - name: Snyk test (backend)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk test --file=backend/requirements.txt --package-manager=pip --severity-threshold=high
