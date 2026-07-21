@@ -1,0 +1,91 @@
+# 本番デプロイ CI（rinaresu/CLAUDE.md「再デプロイ」節を CI 化）。
+# ACR でイメージをビルドし、Container Apps のイメージ参照を更新する。
+# 認証は Azure OIDC（federated credential）。creds JSON 方式は使わない。
+name: deploy
+
+on:
+  # 手動デプロイのみ（タグを指定。例: v8）。
+  # デプロイは「ローカル動作確認＋統括の明示的承認の後のみ」（リリース規定）のため、
+  # push による自動デプロイは意図的に設けない。実行ボタンを押す行為＝統括の承認とする。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "イメージタグ（例: v8）。未指定時は sha-<短縮SHA> を自動採番"
+        required: false
+        type: string
+
+# 同時デプロイを禁止（Container App の単一レプリカ前提・整合性確保）。
+# 進行中のデプロイは中断せず、後続をキューイングする。
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+# OIDC トークン発行に id-token: write が必須
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR: acrrinaresua37c
+  RESOURCE_GROUP: rg-001-gen12
+  API_APP: ca-rinaresu-api
+  WEB_APP: ca-rinaresu-web
+  # フロントはビルド時に NEXT_PUBLIC_* を埋め込む必要がある（両方必須）
+  NEXT_PUBLIC_API_BASE: https://ca-rinaresu-api.happywater-4b65aee9.japaneast.azurecontainerapps.io
+  NEXT_PUBLIC_GOOGLE_CLIENT_ID: 39205794623-c6r088k3pchlajvbt2kvtse8daec7iqk.apps.googleusercontent.com
+
+jobs:
+  deploy:
+    name: build & deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # タグを決定: 手動指定があればそれを、なければ sha-<短縮SHA> を採番
+      - name: resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Azure OIDC ログイン（federated credential。client/tenant/subscription は secrets 参照）
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # API イメージを ACR でビルド
+      - name: build api image
+        run: |
+          az acr build -r "$ACR" \
+            -t rinaresu-api:${{ steps.tag.outputs.value }} \
+            ./backend
+
+      # Web イメージを ACR でビルド（NEXT_PUBLIC_* を build-arg で埋め込む）
+      - name: build web image
+        run: |
+          az acr build -r "$ACR" \
+            -t rinaresu-web:${{ steps.tag.outputs.value }} \
+            --build-arg NEXT_PUBLIC_API_BASE="$NEXT_PUBLIC_API_BASE" \
+            --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID="$NEXT_PUBLIC_GOOGLE_CLIENT_ID" \
+            ./frontend
+
+      # Container Apps のイメージ参照を更新（新リビジョンが自動作成される）
+      - name: update api container app
+        run: |
+          az containerapp update -n "$API_APP" -g "$RESOURCE_GROUP" \
+            --image "$ACR.azurecr.io/rinaresu-api:${{ steps.tag.outputs.value }}"
+
+      - name: update web container app
+        run: |
+          az containerapp update -n "$WEB_APP" -g "$RESOURCE_GROUP" \
+            --image "$ACR.azurecr.io/rinaresu-web:${{ steps.tag.outputs.value }}"
+
+      - name: deployed
+        run: |
+          echo "デプロイ完了: tag=${{ steps.tag.outputs.value }}"
