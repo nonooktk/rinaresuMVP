@@ -53,7 +53,7 @@ jobs:
     # （branch 用 subject のままだと AADSTS700213 等でログインに失敗する）。
     environment: production
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # タグを決定。ユーザー入力はシェルへ直接展開せず env 経由で受け取り、
       # 許可文字（英数と . _ - のみ・先頭は英数・最大128文字）で検証する。
