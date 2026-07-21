@@ -8,7 +8,7 @@ pydantic==2.9.2
 # F-4: python-multipart は複数の DoS 系脆弱性を解消した最新版へ更新
 python-multipart==0.0.32
 reportlab==5.0.0
-qrcode[pil]==7.4.2
+qrcode[pil]==8.2
 psycopg2-binary==2.9.10
 google-auth==2.35.0
 # F-4: requests は .netrc 資格情報漏洩等（PYSEC-2026-1872/2275）解消版へ更新
