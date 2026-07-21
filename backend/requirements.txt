@@ -7,7 +7,7 @@ sqlalchemy==2.0.35
 pydantic==2.9.2
 # F-4: python-multipart は複数の DoS 系脆弱性を解消した最新版へ更新
 python-multipart==0.0.32
-reportlab==4.2.5
+reportlab==5.0.0
 qrcode[pil]==7.4.2
 psycopg2-binary==2.9.10
 google-auth==2.35.0
