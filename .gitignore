@@ -15,10 +15,11 @@ frontend/node_modules/
 frontend/.next/
 frontend/tsconfig.tsbuildinfo
 
-# 環境変数ファイル（コミット禁止。サンプルは .env.local.example を参照）
+# 環境変数ファイル（コミット禁止。サンプルは .env.local.example / backend/.env.example を参照）
 .env
 .env.*
 !.env.local.example
+!.env.example
 
 # --- macOS / エディタ ---
 .DS_Store

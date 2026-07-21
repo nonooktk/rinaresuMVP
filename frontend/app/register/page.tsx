@@ -16,7 +16,7 @@ import Sparkles from "@/components/Sparkles";
 import { useToast } from "@/components/Toast";
 import { api, ApiError } from "@/lib/api";
 import {
-  storeUser,
+  storeSession,
   getPendingCredential,
   clearPendingCredential,
 } from "@/lib/session";
@@ -80,13 +80,13 @@ export default function RegisterPage() {
     }
     setSubmitting(true);
     try {
-      const user = await api.createUser({
+      const session = await api.createUser({
         credential,
         nickname: nickname.trim(),
         idol_id: idolId,
       });
       clearPendingCredential(); // 使い終わった credential は破棄
-      storeUser(user);
+      storeSession(session.user, session.token);
       show("アカウントを作成しました！", "success");
       router.push("/home");
     } catch (e) {

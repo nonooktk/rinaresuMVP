@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Device, Idol, IdolComment, Shipment, User
 from app.schemas import (
+    AuthSessionOut,
     CommentOut,
     DeviceOut,
     ShipmentHistoryOut,
@@ -18,6 +19,7 @@ from app.schemas import (
 )
 from app.deps import get_current_user
 from app.services.google_auth import verify_google_credential
+from app.services.session_token import issue_session_token
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -32,13 +34,12 @@ def _generate_temp_id(db: Session) -> str:
             return temp_id
 
 
-@router.get("", response_model=list[UserOut])
-def list_users(db: Session = Depends(get_db)):
-    """ログイン選択用のユーザー一覧を返す。"""
-    return db.query(User).all()
+# 【F-2 対応】旧 `GET /api/users`（list_users）は削除した。
+# 仮ID選択式ログインの名残で、認証なしに全ユーザー（email 含む）を列挙でき、
+# PII 一括収集の穴になっていた。現行フローでは用途が無いため撤廃する。
 
 
-@router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AuthSessionOut, status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     """
     新規ユーザーを作成する。
@@ -47,6 +48,8 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     その sub / email を保存する。temp_id は従来どおり内部で自動採番する
     （省略・指定いずれも可。互換のため残す）。
     同じ Google アカウント（sub）での重複登録は 409 とする。
+
+    登録完了はログイン確立とみなし、セッション通行証（token）も併せて返す。
     """
     # まず Google 認証を検証（失敗なら 401）
     try:
@@ -93,7 +96,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-    return user
+    return AuthSessionOut(user=UserOut.model_validate(user), token=issue_session_token(user.id))
 
 
 @router.patch("/me", response_model=UserOut)
@@ -121,20 +124,34 @@ def update_me(
 
 
 @router.get("/{user_id}", response_model=UserOut)
-def get_user(user_id: int, db: Session = Depends(get_db)):
-    """指定ユーザーの情報を返す。"""
-    user = db.get(User, user_id)
-    if user is None:
+def get_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """指定ユーザーの情報を返す（本人のみ。email 等の PII を含むため）。
+
+    【F-2 対応】従来は無認証で任意ユーザーの email を露出していた。
+    本人以外の user_id は存在を伏せて 404 とする（存在秘匿）。
+    """
+    if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
-    return user
+    return current_user
 
 
 @router.get("/{user_id}/comment", response_model=CommentOut)
-def get_user_comment(user_id: int, db: Session = Depends(get_db)):
-    """推しアイドル×現ランクのコメントテンプレからランダムに1件選び、{nickname}を置換して返す。"""
-    user = db.get(User, user_id)
-    if user is None:
+def get_user_comment(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """推しアイドル×現ランクのコメントテンプレからランダムに1件選び、{nickname}を置換して返す。
+
+    【F-2 対応】本人のみ（あだ名を含むため）。本人以外は 404（存在秘匿）。
+    """
+    if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
+    user = current_user
 
     candidates = (
         db.query(IdolComment)
@@ -166,10 +183,17 @@ def _device_to_out(device: Device) -> DeviceOut:
 
 
 @router.get("/{user_id}/history", response_model=UserHistoryOut)
-def get_user_history(user_id: int, db: Session = Depends(get_db)):
-    """ユーザーのデバイス・送付履歴を返す。"""
-    user = db.get(User, user_id)
-    if user is None:
+def get_user_history(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """ユーザーのデバイス・送付履歴を返す（本人のみ）。
+
+    【F-2 対応】従来は無認証で任意ユーザーの端末・送付履歴を露出していた（IDOR）。
+    本人以外の user_id は存在を伏せて 404 とする（存在秘匿）。
+    """
+    if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
 
     devices = db.query(Device).filter(Device.user_id == user_id).all()

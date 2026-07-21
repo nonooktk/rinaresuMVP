@@ -24,6 +24,13 @@ export interface GoogleAuthResult {
   registered: boolean; // 既存ユーザーかどうか
   user?: User | null; // 既存ユーザーの場合のみ返る
   email?: string | null; // 既存ユーザーの確認用メール
+  token?: string | null; // 既存ユーザーの場合のみ返るセッション通行証
+}
+
+// ログイン確立レスポンス（新規登録 POST /api/users の返却）
+export interface AuthSession {
+  user: User;
+  token: string; // セッション通行証（Authorization: Bearer で送る）
 }
 
 // デバイス種別マスタ

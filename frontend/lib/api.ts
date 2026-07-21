@@ -1,10 +1,12 @@
 // APIクライアント（バックエンド FastAPI との通信を集約）
 // - ベースURL: NEXT_PUBLIC_API_BASE（既定 http://localhost:8000）
-// - 認証: X-User-Id ヘッダーを付与
+// - 認証: アプリ独自セッション通行証を Authorization: Bearer で付与（X-User-Id は廃止）
 // - API失敗時は ApiError を throw。呼び出し側でトースト表示して壊れないようにする。
+// - 401（通行証の失効・不正）受信時は通行証を破棄して /login へ誘導する。
 
-import { getStoredUser } from "./session";
+import { clearUser, getToken } from "./session";
 import type {
+  AuthSession,
   ClassifyResult,
   Device,
   DeviceType,
@@ -41,17 +43,33 @@ export function mediaUrl(path: string | undefined | null): string {
   return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
+// 401 受信時: 通行証を破棄してログイン画面へ誘導する。
+// ただしログイン処理そのもの（通行証を持たない状態での /api/auth/* や登録）で
+// リダイレクトループに陥らないよう、「通行証を持っていた場合」のみ実施する。
+function handleUnauthorized(hadToken: boolean): void {
+  if (typeof window === "undefined") return;
+  clearUser();
+  if (hadToken && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
+// 認証ヘッダー（通行証があれば Authorization: Bearer を付与）
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // 共通リクエスト関数
 async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const user = getStoredUser();
+  const token = getToken();
   const headers: Record<string, string> = {
+    ...authHeaders(),
     ...(options.headers as Record<string, string> | undefined),
   };
-  // ログイン済みなら X-User-Id を付与
-  if (user?.id) headers["X-User-Id"] = user.id;
 
   let res: Response;
   try {
@@ -65,6 +83,7 @@ async function request<T>(
   }
 
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized(!!token);
     let detail = `エラーが発生しました (${res.status})`;
     try {
       const body = await res.json();
@@ -99,16 +118,16 @@ export const api = {
   // 1. アイドル一覧
   getIdols: () => request<Idol[]>("/api/idols"),
 
-  // 2. ユーザー一覧
-  getUsers: () => request<User[]>("/api/users"),
+  // 2. （旧）ユーザー一覧 GET /api/users は F-2 対応で撤廃した（全 PII 列挙の穴だったため）。
 
-  // 3. ユーザー作成（Google の credential を添付して本人性を確認）
+  // 3. ユーザー作成（Google の credential を添付して本人性を確認）。
+  //    登録完了はログイン確立とみなし、user と通行証(token)を返す。
   createUser: (payload: {
     credential: string;
     temp_id?: string;
     nickname: string;
     idol_id: string;
-  }) => request<User>("/api/users", jsonInit(payload)),
+  }) => request<AuthSession>("/api/users", jsonInit(payload)),
 
   // 4. ユーザー詳細
   getUser: (id: string) => request<User>(`/api/users/${id}`),
@@ -146,8 +165,24 @@ export const api = {
   createShipment: (device_ids: string[]) =>
     request<Shipment>("/api/shipments", jsonInit({ device_ids })),
 
-  // 11. 伝票PDFのURL（GETで開く用。実データ取得はブラウザに任せる）
-  shipmentPdfUrl: (id: string) => `${API_BASE}/api/shipments/${id}/pdf`,
+  // 11. 伝票PDFを取得する（F-3 対応で認証必須になったため、Bearer 付きで fetch し Blob を返す）。
+  //     生 URL を新規タブで直接開くと Authorization を付与できないため、呼び出し側で
+  //     Blob → object URL 化して開く。
+  fetchShipmentPdf: async (id: string): Promise<Blob> => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/api/shipments/${id}/pdf`, {
+        headers: authHeaders(),
+      });
+    } catch {
+      throw new ApiError("サーバーに接続できませんでした", 0);
+    }
+    if (!res.ok) {
+      if (res.status === 401) handleUnauthorized(!!getToken());
+      throw new ApiError(`伝票PDFの取得に失敗しました (${res.status})`, res.status);
+    }
+    return res.blob();
+  },
 
   // 11b. 検収完了（自分の送付を受領扱いにしポイント付与・ランク再計算）
   receiveShipment: (id: string) =>

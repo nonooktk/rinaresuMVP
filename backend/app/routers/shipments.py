@@ -138,10 +138,22 @@ def get_shipment_share_text(
 
 
 @router.get("/{shipment_id}/pdf")
-def get_shipment_pdf(shipment_id: int, db: Session = Depends(get_db)):
-    """送付伝票PDFファイルを返す。"""
+def get_shipment_pdf(
+    shipment_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """送付伝票PDFファイルを返す（本人のみ）。
+
+    【F-3 対応】従来は無認証で誰でも取得でき、連番 shipment_id で他人の伝票
+    （仮ID・あだ名・端末一覧）を収集できた。receive/share-text と同じく owner スコープを課す。
+    - 他人の送付、または存在しない送付は 404（存在秘匿）
+    - 本人の送付だが PDF 未生成も 404
+    """
     shipment = db.get(Shipment, shipment_id)
-    if shipment is None or not shipment.pdf_path:
+    if shipment is None or shipment.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="送付が見つかりません")
+    if not shipment.pdf_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PDFが見つかりません")
 
     return FileResponse(

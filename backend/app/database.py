@@ -16,6 +16,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# ローカル開発用に backend/.env を読み込む（存在しなければ何もしない）。
+# 既に設定済みの環境変数は上書きしない（override=False）ため、本番の実 env が常に優先される。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env", override=False)
+except ImportError:
+    # python-dotenv 未導入でも動作させる（環境変数を直接使う運用にフォールバック）
+    pass
+
 DEFAULT_SQLITE_URL = f"sqlite:///{(DATA_DIR / 'rinaresu.db').as_posix()}"
 DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_SQLITE_URL)
 

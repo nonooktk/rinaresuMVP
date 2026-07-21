@@ -12,7 +12,7 @@ import ScreenFrame from "@/components/ScreenFrame";
 import Sparkles from "@/components/Sparkles";
 import { useToast } from "@/components/Toast";
 import { api } from "@/lib/api";
-import { storeUser, storePendingCredential } from "@/lib/session";
+import { storeSession, storePendingCredential } from "@/lib/session";
 import { loadGsiScript, type GsiCredentialResponse } from "@/lib/gsi";
 
 // クライアントID（秘匿値ではない）。ビルド時に NEXT_PUBLIC_GOOGLE_CLIENT_ID から埋め込む。
@@ -34,9 +34,9 @@ export default function LoginPage() {
     setBusy(true);
     try {
       const result = await api.googleAuth(res.credential);
-      if (result.registered && result.user) {
-        // 既存ユーザー: そのままログイン
-        storeUser(result.user);
+      if (result.registered && result.user && result.token) {
+        // 既存ユーザー: 通行証とともにセッション確立
+        storeSession(result.user, result.token);
         show("おかえりなさい！", "success");
         router.push("/home");
       } else {

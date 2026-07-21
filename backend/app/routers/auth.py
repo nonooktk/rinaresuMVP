@@ -19,6 +19,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import GoogleAuthIn, GoogleAuthOut, UserOut
 from app.services.google_auth import verify_google_credential
+from app.services.session_token import issue_session_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -36,11 +37,12 @@ def google_auth(payload: GoogleAuthIn, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.google_sub == identity.sub).first()
     if user is not None:
-        # 既存ユーザー: そのままログインさせる
+        # 既存ユーザー: セッション通行証を発行してそのままログインさせる
         return GoogleAuthOut(
             registered=True,
             user=UserOut.model_validate(user),
             email=user.email,
+            token=issue_session_token(user.id),
         )
 
     # 未登録: sub は返さず、フロントが保持している credential で登録に進ませる

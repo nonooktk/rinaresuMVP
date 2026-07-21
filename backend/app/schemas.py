@@ -58,6 +58,15 @@ class GoogleAuthOut(BaseModel):
     user: UserOut | None = None
     # 既存ユーザーの確認用メール（未登録時は None、生値の露出は最小限に留める）
     email: str | None = None
+    # 既存ユーザーのみ発行するセッション通行証（未登録時は None）。
+    # 以降の API 呼び出しは Authorization: Bearer でこれを送る。
+    token: str | None = None
+
+
+class AuthSessionOut(BaseModel):
+    # 新規登録完了時のレスポンス（登録＝ログイン確立とみなし通行証を返す）
+    user: UserOut
+    token: str
 
 
 class CommentOut(BaseModel):

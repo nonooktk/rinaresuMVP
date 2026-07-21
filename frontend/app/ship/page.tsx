@@ -55,11 +55,18 @@ export default function ShipPage() {
     setSending(true);
     try {
       const shipment = await api.createShipment(devices.map((d) => d.id));
-      // PDFを新規タブで開く（返却URL優先、無ければエンドポイント）
-      const url = shipment.pdf_url
-        ? mediaUrl(shipment.pdf_url)
-        : api.shipmentPdfUrl(shipment.id);
-      window.open(url, "_blank", "noopener,noreferrer");
+      // 伝票PDFは認証必須（F-3 対応）のため、Bearer 付きで取得して Blob を新規タブで開く。
+      // 生 URL を直接 window.open すると Authorization を付けられず 404 になる。
+      try {
+        const blob = await api.fetchShipmentPdf(shipment.id);
+        const objUrl = URL.createObjectURL(blob);
+        window.open(objUrl, "_blank", "noopener,noreferrer");
+        // メモリ解放（開いたタブが読み込む猶予を持たせてから revoke）
+        setTimeout(() => URL.revokeObjectURL(objUrl), 60_000);
+      } catch {
+        // 送付自体は成立しているため、PDF が開けなくても完了扱いにし案内する
+        show("伝票を発行しました。PDFは履歴から開けます");
+      }
       setDoneOpen(true);
     } catch {
       show("送付の処理に失敗しました。時間をおいて試してね");
