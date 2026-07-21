@@ -11,7 +11,7 @@ requests==2.32.3
 # アプリ独自セッション通行証（HS256 JWT）の発行/検証に使用
 PyJWT==2.9.0
 # ローカルの backend/.env を読み込む（本番の実 env は上書きしない）
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 openai==1.54.4
 # openai 1.54.x は httpx に proxies= を渡すため、それを廃止した httpx 0.28 系と非互換。
 # 0.27 系に固定して回避する。
