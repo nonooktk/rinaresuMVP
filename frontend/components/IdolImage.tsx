@@ -3,7 +3,11 @@
 // アイドル画像表示。パス規約は /idols/{idol_id}/main.png（支給イラスト）を最優先し、
 // 無ければ /idols/{idol_id}/main.svg（プレースホルダー）、それも無ければ頭文字表示。
 // イラスト差し替えはファイル配置だけで反映されるよう、必ずこのコンポーネント経由で参照する。
-import { useState } from "react";
+//
+// 特殊ビジュアル（T2特典）: visual="special" のとき /idols/{id}/special.png を最優先し、
+// 無ければ main.png → main.svg → 頭文字 の順にフォールバックする。
+// 運営は special.png を同パスに置くだけで差し替えできる。
+import { useEffect, useState } from "react";
 
 interface IdolImageProps {
   idolId: string;
@@ -14,6 +18,8 @@ interface IdolImageProps {
   height?: number;
   /** full: 全身表示（既定） / face: 顔まわりを正円でクロップ（アバター用） */
   variant?: "full" | "face";
+  /** main: 通常イラスト（既定） / special: 特殊ビジュアル（special.png 優先） */
+  visual?: "main" | "special";
   className?: string;
 }
 
@@ -23,17 +29,31 @@ export default function IdolImage({
   size = 96,
   height,
   variant = "full",
+  visual = "main",
   className = "",
 }: IdolImageProps) {
-  // 0: main.png → 1: main.svg → 2: 頭文字プレースホルダー
-  const [stage, setStage] = useState<0 | 1 | 2>(0);
-  const src =
-    stage === 0 ? `/idols/${idolId}/main.png` : `/idols/${idolId}/main.svg`;
-  const alt = name ? `${name}のイラスト` : "アイドル";
-  const onError = () => setStage((s) => (s >= 1 ? 2 : 1));
-  const isPng = stage === 0;
+  // visual="special": 0: special.png → 1: main.png → 2: main.svg → 3: 頭文字
+  // visual="main":               1: main.png → 2: main.svg → 3: 頭文字（0 は使わない）
+  const initialStage = visual === "special" ? 0 : 1;
+  const [stage, setStage] = useState<0 | 1 | 2 | 3>(initialStage);
 
-  if (stage === 2) {
+  // idolId / visual が変わったら読み込みステージをリセットする（推し変更・切替に追従）
+  useEffect(() => {
+    setStage(visual === "special" ? 0 : 1);
+  }, [idolId, visual]);
+
+  const src =
+    stage === 0
+      ? `/idols/${idolId}/special.png`
+      : stage === 1
+      ? `/idols/${idolId}/main.png`
+      : `/idols/${idolId}/main.svg`;
+  const alt = name ? `${name}のイラスト` : "アイドル";
+  const onError = () => setStage((s) => (s >= 2 ? 3 : ((s + 1) as 1 | 2 | 3)));
+  // png（special.png / main.png）は透過前提のクロップ調整を効かせる
+  const isPng = stage === 0 || stage === 1;
+
+  if (stage === 3) {
     // フォールバック（丸い枠に頭文字）
     return (
       <div

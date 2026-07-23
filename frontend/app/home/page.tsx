@@ -14,8 +14,9 @@ import GameDialog from "@/components/GameDialog";
 import SpeechBubble from "@/components/SpeechBubble";
 import RankBadge from "@/components/RankBadge";
 import IdolImage from "@/components/IdolImage";
+import RewardsProgressBar from "@/components/RewardsProgressBar";
 import { useToast } from "@/components/Toast";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { clearUser, getStoredUser, storeUser } from "@/lib/session";
 import type { Idol, User } from "@/lib/types";
 import { FALLBACK_IDOLS } from "@/lib/idols";
@@ -28,6 +29,11 @@ export default function HomePage() {
   const [comment, setComment] = useState<string>("");
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [ready, setReady] = useState(false);
+  // 特殊ビジュアル切替の送信中フラグ（二度押し防止）
+  const [visualSaving, setVisualSaving] = useState(false);
+  // 現在の推しが期間限定推し（7人目）かどうか。限定推しには special.png が無いため、
+  // ビジュアル切替（とくべつ）と special 表示を抑止して 404 ノイズを防ぐ（Q-1 Nit）。
+  const [onLimitedIdol, setOnLimitedIdol] = useState(false);
 
   // ホーム表示のたびにユーザー最新化＋コメント取得
   const load = useCallback(async () => {
@@ -42,20 +48,40 @@ export default function HomePage() {
     const fb = FALLBACK_IDOLS.find((i) => i.id === stored.idol_id) ?? null;
     setIdol(fb);
 
-    // ユーザー最新化
+    // ユーザー最新化。月替わりで限定推しから自動復帰していることがあるため、
+    // 以降のアイドル解決は必ず「再取得後の idol_id」を基準にする（H-4）。
+    let currentIdolId = stored.idol_id;
     try {
       const fresh = await api.getUser(stored.id);
       setUser(fresh);
       storeUser(fresh);
+      currentIdolId = fresh.idol_id;
+      // フォールバック表示も最新 idol_id に合わせて更新
+      const fb2 = FALLBACK_IDOLS.find((i) => i.id === currentIdolId) ?? null;
+      if (fb2) setIdol(fb2);
     } catch {
       // 取得失敗時は保存済みを使う（トーストは控えめに）
     }
 
-    // アイドル一覧（テーマカラー等の最新化）
+    // アイドル一覧（テーマカラー等の最新化）。再取得後の idol_id で解決する。
     try {
       const idols = await api.getIdols();
-      const found = idols.find((i) => i.id === stored.idol_id);
-      if (found) setIdol(found);
+      const found = idols.find((i) => i.id === currentIdolId);
+      if (found) {
+        setIdol(found);
+        setOnLimitedIdol(false);
+      } else {
+        // 通常一覧に無い＝期間限定推しを選択中。獲得者なら限定推し情報で解決する。
+        try {
+          const limited = await api.getLimitedIdol();
+          if (limited.id === currentIdolId) {
+            setIdol(limited);
+            setOnLimitedIdol(true);
+          }
+        } catch {
+          /* 非保有(404)等では通常フォールバックのまま */
+        }
+      }
     } catch {
       /* フォールバック済み */
     }
@@ -81,7 +107,38 @@ export default function HomePage() {
     router.replace("/");
   };
 
+  // 特殊ビジュアル（T2特典）の表示切替。獲得者のみ表示されるトグルから呼ぶ。
+  const setVisual = async (visual: "main" | "special") => {
+    if (!user || visualSaving || user.active_visual === visual) return;
+    setVisualSaving(true);
+    try {
+      const updated = await api.updateMe({ active_visual: visual });
+      setUser(updated);
+      storeUser(updated);
+      show(
+        visual === "special"
+          ? "とくべつなすがたに変えたよ"
+          : "いつものすがたに戻したよ",
+        "info"
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        show("ログイン情報が切れました。もう一度ログインしてね");
+        router.replace("/");
+        return;
+      }
+      show("ビジュアルの切替に失敗しました");
+    } finally {
+      setVisualSaving(false);
+    }
+  };
+
   const theme = idol?.theme_color ?? "#ff87b2";
+  // 限定推しには special.png が無いため、special を選んでいても main を表示する（Q-1 Nit）。
+  const activeVisual =
+    user?.active_visual === "special" && !onLimitedIdol ? "special" : "main";
+  // 特殊ビジュアルトグルは T2 獲得済み かつ 限定推し以外のときのみ表示する。
+  const hasSpecialVisual = !!user?.rewards?.special_visual && !onLimitedIdol;
 
   if (!ready || !user) {
     return (
@@ -108,6 +165,17 @@ export default function HomePage() {
         <RankBadge rank={user.rank} points={user.points} />
       </div>
 
+      {/* 特典プログレスバー（RankBadge 直下） */}
+      <div className="relative px-5 pt-3">
+        <RewardsProgressBar
+          monthlyPoints={user.monthly_points ?? 0}
+          nextReward={user.next_reward}
+          rewards={user.rewards}
+          nickname={user.nickname}
+          themeColor={idol?.theme_color}
+        />
+      </div>
+
       {/* 吹き出し＋推しイラスト */}
       <div className="relative flex flex-col items-center px-5 pt-4">
         <div className="mb-4 w-full px-2">
@@ -119,11 +187,46 @@ export default function HomePage() {
           name={idol?.name}
           size={230}
           height={330}
+          visual={activeVisual}
           className="animate-floaty"
         />
         <p className="mt-1 text-sm font-bold text-[var(--ink)]">
           {idol?.name ?? "推し"}
         </p>
+
+        {/* 特殊ビジュアル切替トグル（T2獲得者のみ表示） */}
+        {hasSpecialVisual && (
+          <div
+            className="mt-2 inline-flex items-center rounded-full bg-white/70 p-1 shadow-sm"
+            role="group"
+            aria-label="ビジュアル切替"
+          >
+            {(
+              [
+                ["main", "いつもの"],
+                ["special", "とくべつ"],
+              ] as ["main" | "special", string][]
+            ).map(([key, label]) => {
+              const selected = activeVisual === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setVisual(key)}
+                  disabled={visualSaving}
+                  aria-pressed={selected}
+                  className={`min-h-[32px] rounded-full px-3 py-1 text-[12px] font-bold transition-colors ${
+                    selected
+                      ? "bg-[var(--pink-400)] text-white shadow"
+                      : "text-[var(--ink-soft)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* メニュー */}

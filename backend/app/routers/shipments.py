@@ -12,7 +12,7 @@ from app.schemas import (
     ShipmentCreate,
     ShipmentCreateOut,
 )
-from app.services.receiving import receive_shipment_core
+from app.services.receiving import lock_shipment_for_receive, receive_shipment_core
 from app.services.share_text import build_share_text
 from app.services.slip_pdf import generate_slip_pdf
 
@@ -97,7 +97,8 @@ def receive_own_shipment(
     - 他人の送付、または存在しない送付は 404（存在秘匿のため区別しない）
     - 受領済みは 400
     """
-    shipment = db.get(Shipment, shipment_id)
+    # 受領対象を悲観ロックで取得（PGは行ロック。二重受領の排他は core の原子CASが担保）
+    shipment = lock_shipment_for_receive(db, shipment_id)
     # 本人の送付でなければ、存在自体を伏せて 404 を返す
     if shipment is None or shipment.user_id != current_user.id:
         raise HTTPException(

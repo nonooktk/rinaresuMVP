@@ -29,8 +29,11 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    # 推し変更（idol_id のみ変更可。points / rank は引き継ぐため受け付けない）
-    idol_id: str
+    # 推し変更（idol_id）・特殊ビジュアル切替（active_visual）。
+    # いずれも任意（None のフィールドは変更しない）。points / rank は引き継ぐため受け付けない。
+    # 後方互換: 従来の {"idol_id": "..."} のみのリクエストもそのまま通る。
+    idol_id: str | None = None
+    active_visual: str | None = None  # "main" / "special"
 
 
 class UserOut(BaseModel):
@@ -43,6 +46,30 @@ class UserOut(BaseModel):
     email: str | None = None
     points: int
     rank: int
+    # ---------- pt特典プログラム（新規・後方互換の追加のみ） ----------
+    monthly_points: int = 0
+    monthly_period: str | None = None
+    active_visual: str = "main"
+
+
+# 次に狙う特典（月間ptに対する到達目標）
+class NextReward(BaseModel):
+    tier: str        # "T1" / "T2" / "T3"
+    threshold: int   # 到達目標の閾値
+    remaining: int   # あと何ptで到達するか（threshold - monthly_points）
+
+
+# 特典保有状況
+class RewardsStatus(BaseModel):
+    special_visual: bool        # T2（特殊ビジュアル・恒久）獲得済みか
+    limited_idol_active: bool   # T1（期間限定推し・当月）が有効か
+    tickets: int                # T3（握手会抽選券・恒久）の保有枚数
+
+
+class UserDetailOut(UserOut):
+    """GET /api/users/{id} 用。UserOut に特典の集計情報を足した詳細レスポンス。"""
+    next_reward: NextReward | None = None
+    rewards: RewardsStatus
 
 
 # ---------- Auth（Google 認証） ----------
@@ -168,7 +195,18 @@ class ShareTextOut(BaseModel):
 
 
 # ---------- Dev / 受領 ----------
+class RewardGranted(BaseModel):
+    """1回の受領で新規付与された特典1件。"""
+    tier: str          # "T1" / "T2" / "T3"
+    threshold: int     # 跨いだ閾値
+    reward_type: str   # "limited_idol" / "special_visual" / "handshake_ticket"
+    label: str         # 表示用ラベル（例: 期間限定推し）
+
+
 class ReceiveResult(BaseModel):
     points_added: int
     new_points: int
     new_rank: int
+    # ---------- pt特典プログラム（新規・後方互換の追加のみ） ----------
+    monthly_points: int = 0                          # 受領後の当月月間pt
+    rewards_granted: list[RewardGranted] = []        # この受領で新規付与された特典

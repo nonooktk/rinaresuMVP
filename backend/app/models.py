@@ -7,10 +7,12 @@ SQLAlchemyモデル定義。
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -29,6 +31,10 @@ class Idol(Base):
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     theme_color: Mapped[str] = mapped_column(String(7), nullable=False)  # 例: #FFB6C1
     catchphrase: Mapped[str] = mapped_column(String(200), nullable=False)
+    # 期間限定推し（7人目・T1特典）かどうか。True の限定推しは通常一覧
+    # （GET /api/idols）には出さず、T1獲得済みユーザーの /oshi にのみ登場させる。
+    # 限定推しの定義は backend/app/limited_idol.py に集約し、seed が upsert する。
+    is_limited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     users: Mapped[list["User"]] = relationship(back_populates="idol")
     comments: Mapped[list["IdolComment"]] = relationship(back_populates="idol")
@@ -50,9 +56,23 @@ class User(Base):
     points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rank: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
+    # ---------- pt特典プログラム（月間pt＋3段階特典） ----------
+    # 累計 points（上）とは別軸の「月間pt」。ランク判定には使わない。
+    # 遅延リセット方式: 参照・加算のたびに現在のJST年月と monthly_period を比較し、
+    # 不一致なら 0 リセットして monthly_period を更新する（cron不要）。
+    monthly_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 月間ptの集計対象月（"YYYY-MM"・JST基準）。None は未初期化（初回加算/参照時に確定）。
+    monthly_period: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    # ホームのイラスト表示モード。"main"=通常 / "special"=特殊ビジュアル（T2獲得者のみ切替可）。
+    active_visual: Mapped[str] = mapped_column(String(10), default="main", nullable=False)
+    # 期間限定推し（T1）を選択中に、元の推しへ月替わりで自動復帰するための退避先。
+    # idol_id と同じスラッグ文字列。限定推し選択時のみセットし、復帰・通常推し選択で None に戻す。
+    prev_idol_id: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     idol: Mapped["Idol"] = relationship(back_populates="users")
     devices: Mapped[list["Device"]] = relationship(back_populates="user")
     shipments: Mapped[list["Shipment"]] = relationship(back_populates="user")
+    rewards: Mapped[list["UserReward"]] = relationship(back_populates="user")
 
 
 class DeviceType(Base):
@@ -121,3 +141,36 @@ class FaqEntry(Base):
     question: Mapped[str] = mapped_column(String(200), nullable=False)
     keywords: Mapped[str] = mapped_column(String(300), nullable=False)  # カンマ区切り
     answer: Mapped[str] = mapped_column(String(500), nullable=False)  # {nickname} プレースホルダー可
+
+
+class UserReward(Base):
+    """pt特典プログラムの付与履歴（1レコード＝1回の特典獲得）。
+
+    受領処理で月間ptが閾値を跨いだときに作成する。
+    - tier: "T1" / "T2" / "T3"
+    - threshold: 跨いだ閾値（100 / 500 / 1000,2000,3000...）
+    - period: 獲得した月（"YYYY-MM"・JST）。月が替われば同一閾値でも再獲得できる。
+    - reward_type: "limited_idol"（T1）/ "special_visual"（T2）/ "handshake_ticket"（T3）
+
+    保有状況の算出方式（専用カウンタ列を持たず、このテーブルの集計で表す）:
+      - 特殊ビジュアル（恒久）: reward_type="special_visual" のレコードが1件でもあれば獲得済み
+      - 期間限定推し（当月のみ）: reward_type="limited_idol" かつ period=当月 のレコードがあれば有効
+      - 抽選券（恒久・積み上げ）: reward_type="handshake_ticket" のレコード件数＝保有枚数
+
+    同一 period 内での同一 threshold の重複付与を DB レベルでも防ぐため、
+    UNIQUE(user_id, threshold, period) の保険をかける（跨ぎ判定でも防いでいる）。
+    """
+    __tablename__ = "user_rewards"
+    __table_args__ = (
+        UniqueConstraint("user_id", "threshold", "period", name="uq_user_reward_period"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    tier: Mapped[str] = mapped_column(String(4), nullable=False)  # T1 / T2 / T3
+    threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)  # "YYYY-MM"（JST）
+    reward_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user: Mapped["User"] = relationship(back_populates="rewards")

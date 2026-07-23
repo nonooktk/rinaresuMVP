@@ -9,9 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Shipment
 from app.schemas import ReceiveResult
-from app.services.receiving import receive_shipment_core
+from app.services.receiving import lock_shipment_for_receive, receive_shipment_core
 
 router = APIRouter(prefix="/api/dev", tags=["dev"])
 
@@ -23,9 +22,10 @@ def receive_shipment(shipment_id: int, db: Session = Depends(get_db)):
 
     shipmentとその配下のdevicesをreceivedにし、
     ユーザーに合計ポイントを付与してランクを再計算する。
-    受領処理の中核は services/receiving.py に共通化している（挙動は従来と同一）。
+    受領処理の中核は services/receiving.py に共通化している（並行安全化済み）。
     """
-    shipment = db.get(Shipment, shipment_id)
+    # 悲観ロックで取得（PG）。二重受領の排他は core の原子CASが担保。
+    shipment = lock_shipment_for_receive(db, shipment_id)
     if shipment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="送付が見つかりません")
 

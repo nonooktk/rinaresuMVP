@@ -19,6 +19,7 @@ from app.database import get_db
 from app.models import User
 from app.schemas import GoogleAuthIn, GoogleAuthOut, UserOut
 from app.services.google_auth import verify_google_credential
+from app.services.monthly import current_period_jst, sync_monthly
 from app.services.session_token import issue_session_token
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -37,6 +38,9 @@ def google_auth(payload: GoogleAuthIn, db: Session = Depends(get_db)):
 
     user = db.query(User).filter(User.google_sub == identity.sub).first()
     if user is not None:
+        # 【H-1 対応】月間ptを返す経路のため、応答前に遅延リセットを適用・commit する。
+        # 月替わり後の初回ログインで localStorage に先月の月間pt/限定推し状態を保存させない。
+        sync_monthly(user, db, current_period_jst())
         # 既存ユーザー: セッション通行証を発行してそのままログインさせる
         return GoogleAuthOut(
             registered=True,

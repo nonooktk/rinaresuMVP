@@ -8,7 +8,24 @@ export interface Idol {
   catchphrase: string;
 }
 
+// 次に狙う特典（月間ptに対する到達目標）
+export interface NextReward {
+  tier: string; // "T1" / "T2" / "T3"
+  threshold: number; // 到達目標の閾値
+  remaining: number; // あと何ptで到達するか
+}
+
+// 特典保有状況
+export interface RewardsStatus {
+  special_visual: boolean; // T2（特殊ビジュアル・恒久）獲得済みか
+  limited_idol_active: boolean; // T1（期間限定推し・当月）が有効か
+  tickets: number; // T3（握手会抽選券・恒久）の保有枚数
+}
+
 // ユーザー情報（セッションで localStorage に保存する対象）
+// pt特典プログラムの追加フィールドはすべて任意（後方互換）。
+// GET /api/users/{id}（詳細）では next_reward / rewards まで返るが、
+// 新規登録・推し変更のレスポンスでは monthly_* / active_visual までのことがある。
 export interface User {
   id: string;
   temp_id: string;
@@ -17,6 +34,11 @@ export interface User {
   email?: string | null; // Google アカウントのメール（確認用）
   points: number;
   rank: number; // 1〜3
+  monthly_points?: number; // 当月の月間pt
+  monthly_period?: string | null; // 集計対象月 "YYYY-MM"
+  active_visual?: string; // "main" / "special"
+  next_reward?: NextReward | null; // 次に狙う特典（詳細レスポンスのみ）
+  rewards?: RewardsStatus; // 特典保有状況（詳細レスポンスのみ）
 }
 
 // POST /api/auth/google のレスポンス
@@ -99,11 +121,21 @@ export interface FaqAnswer {
   generated_by?: string; // "ai" or "keyword"（後方互換の任意フィールド）
 }
 
+// 1回の受領で新規付与された特典1件
+export interface RewardGranted {
+  tier: string; // "T1" / "T2" / "T3"
+  threshold: number; // 跨いだ閾値
+  reward_type: string; // "limited_idol" / "special_visual" / "handshake_ticket"
+  label: string; // 表示用ラベル（例: 期間限定推し）
+}
+
 // 検収完了（受領）結果
 export interface ReceiveResult {
   points_added: number;
   new_points: number;
   new_rank: number;
+  monthly_points?: number; // 受領後の当月月間pt（後方互換の任意フィールド）
+  rewards_granted?: RewardGranted[]; // この受領で新規付与された特典（無ければ空）
 }
 
 // シェア投稿文面
