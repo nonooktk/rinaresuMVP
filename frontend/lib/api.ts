@@ -115,8 +115,11 @@ export const api = {
   googleAuth: (credential: string) =>
     request<GoogleAuthResult>("/api/auth/google", jsonInit({ credential })),
 
-  // 1. アイドル一覧
+  // 1. アイドル一覧（通常6人。期間限定推しは含まない）
   getIdols: () => request<Idol[]>("/api/idols"),
+
+  // 1b. 当月の期間限定推し（T1特典。獲得済みユーザーの /oshi 表示用）
+  getLimitedIdol: () => request<Idol>("/api/idols/limited"),
 
   // 2. （旧）ユーザー一覧 GET /api/users は F-2 対応で撤廃した（全 PII 列挙の穴だったため）。
 
@@ -132,8 +135,9 @@ export const api = {
   // 4. ユーザー詳細
   getUser: (id: string) => request<User>(`/api/users/${id}`),
 
-  // 4b. ログイン中ユーザーの更新（推し変更。points / rank は引き継ぐ）
-  updateMe: (payload: { idol_id: string }) =>
+  // 4b. ログイン中ユーザーの更新（推し変更 idol_id ／ 特殊ビジュアル切替 active_visual）。
+  //     いずれも任意。points / rank は引き継ぐ。
+  updateMe: (payload: { idol_id?: string; active_visual?: string }) =>
     request<User>("/api/users/me", jsonInit(payload, "PATCH")),
 
   // 5. 推しコメント取得

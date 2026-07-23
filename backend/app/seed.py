@@ -6,15 +6,43 @@
 """
 from sqlalchemy.orm import Session
 
+from app.limited_idol import LIMITED_IDOL
 from app.models import DeviceType, FaqEntry, Idol, IdolComment
 
 
 def seed_all(db: Session) -> None:
     """全seedデータを投入する（冪等）。"""
     _seed_idols(db)
+    _seed_limited_idol(db)
     _seed_device_types(db)
     _seed_faq(db)
     db.commit()
+
+
+def _seed_limited_idol(db: Session) -> None:
+    """期間限定推し（7人目・T1特典）を idols テーブルへ upsert する。
+
+    定義の真実の源は backend/app/limited_idol.py。運営が同ファイルを書き換えて
+    再起動すると、ここで idols テーブルの当該行が最新の名前・色・キャッチフレーズに
+    更新される（存在しなければ追加）。is_limited=True のため通常一覧には出ない。
+    """
+    existing = db.get(Idol, LIMITED_IDOL["id"])
+    if existing is None:
+        db.add(
+            Idol(
+                id=LIMITED_IDOL["id"],
+                name=LIMITED_IDOL["name"],
+                theme_color=LIMITED_IDOL["theme_color"],
+                catchphrase=LIMITED_IDOL["catchphrase"],
+                is_limited=True,
+            )
+        )
+    else:
+        # 運営がファイルを差し替えた場合に備え、属性を最新化する（is_limited は必ず True）
+        existing.name = LIMITED_IDOL["name"]
+        existing.theme_color = LIMITED_IDOL["theme_color"]
+        existing.catchphrase = LIMITED_IDOL["catchphrase"]
+        existing.is_limited = True
 
 
 def _seed_idols(db: Session) -> None:

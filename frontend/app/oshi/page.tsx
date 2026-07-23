@@ -26,6 +26,9 @@ export default function OshiPage() {
 
   const [user, setUser] = useState<User | null>(null);
   const [idols, setIdols] = useState<Idol[]>(FALLBACK_IDOLS);
+  // 期間限定推し（T1獲得者のみ選択肢に加える）
+  const [limitedIdol, setLimitedIdol] = useState<Idol | null>(null);
+  const [limitedActive, setLimitedActive] = useState(false);
   // 変更先として選択中のアイドル（現在の推しと別のものを選んだときだけ確認へ進む）
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -60,13 +63,48 @@ export default function OshiPage() {
     };
   }, [show]);
 
+  // 最新ユーザー（特典状況）を取得し、T1（期間限定推し）が当月有効なら選択肢に加える
+  useEffect(() => {
+    const stored = getStoredUser();
+    if (!stored) return;
+    let alive = true;
+    (async () => {
+      try {
+        const fresh = await api.getUser(stored.id);
+        if (!alive) return;
+        setUser(fresh);
+        storeUser(fresh);
+        if (fresh.rewards?.limited_idol_active) {
+          setLimitedActive(true);
+          try {
+            const limited = await api.getLimitedIdol();
+            if (alive) setLimitedIdol(limited);
+          } catch {
+            /* 限定推しの取得失敗時は通常6人のみ表示 */
+          }
+        }
+      } catch {
+        /* 取得失敗時は保存済みユーザーで続行（限定推しは出さない） */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 表示するアイドル（限定推しが有効なら末尾に追加）
+  const displayIdols = useMemo(
+    () => (limitedActive && limitedIdol ? [...idols, limitedIdol] : idols),
+    [idols, limitedActive, limitedIdol]
+  );
+
   const currentIdol = useMemo(
-    () => idols.find((i) => i.id === user?.idol_id) ?? null,
-    [idols, user]
+    () => displayIdols.find((i) => i.id === user?.idol_id) ?? null,
+    [displayIdols, user]
   );
   const selectedIdol = useMemo(
-    () => idols.find((i) => i.id === selectedId) ?? null,
-    [idols, selectedId]
+    () => displayIdols.find((i) => i.id === selectedId) ?? null,
+    [displayIdols, selectedId]
   );
 
   // 現在の推しと別のアイドルを選んでいるときだけ変更できる
@@ -130,9 +168,10 @@ export default function OshiPage() {
           </span>
         </p>
         <div className="grid grid-cols-2 gap-3 overflow-y-auto pb-2">
-          {idols.map((idol) => {
+          {displayIdols.map((idol) => {
             const active = idol.id === selectedId;
             const isCurrent = idol.id === user.idol_id;
+            const isLimited = !!limitedIdol && idol.id === limitedIdol.id;
             return (
               <button
                 key={idol.id}
@@ -140,12 +179,19 @@ export default function OshiPage() {
                 className={`relative flex flex-col items-center gap-1 rounded-3xl border-2 bg-white p-2 transition-transform active:scale-[0.97] ${
                   active
                     ? "animate-glow border-[var(--pink-400)]"
+                    : isLimited
+                    ? "border-[var(--accent)]"
                     : "border-[var(--pink-100)]"
                 }`}
               >
                 {isCurrent && (
                   <span className="absolute left-2 top-2 z-10 rounded-full bg-[var(--pink-500)] px-2 py-0.5 text-[10px] font-extrabold text-white shadow">
                     いまの推し
+                  </span>
+                )}
+                {isLimited && (
+                  <span className="absolute right-2 top-2 z-10 rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-extrabold text-white shadow">
+                    今月限定
                   </span>
                 )}
                 <IdolImage

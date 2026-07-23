@@ -14,8 +14,10 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import Device, Shipment, User
-from app.schemas import ReceiveResult
+from app.schemas import ReceiveResult, RewardGranted
+from app.services.monthly import apply_monthly_reset, current_period_jst
 from app.services.points import calc_rank
+from app.services.rewards import grant_rewards
 
 
 def receive_shipment_core(shipment: Shipment, db: Session) -> ReceiveResult:
@@ -24,6 +26,9 @@ def receive_shipment_core(shipment: Shipment, db: Session) -> ReceiveResult:
 
     渡された shipment（未受領前提）を受領済みにし、配下 devices も received にする。
     合計ポイントをユーザーに付与してランクを再計算し、ReceiveResult を返す。
+
+    さらに pt特典プログラムとして、受領時点のJST月に月間ptを加算し、
+    旧→新の月間ptが跨いだ閾値ぶんの特典（T1/T2/T3）を付与する（複数同時付与あり）。
 
     - shipment が既に received の場合は 400
     - ユーザーが見つからない場合は 404
@@ -51,8 +56,20 @@ def receive_shipment_core(shipment: Shipment, db: Session) -> ReceiveResult:
             detail="ユーザーが見つかりません",
         )
 
+    # 累計ポイント（ランク判定はこちら。従来どおり挙動を変えない）
     user.points += points_added
     user.rank = calc_rank(user.points)
+
+    # ---- 月間pt（特典判定軸）----
+    # 受領時点のJST月を基準にする。参照・加算の前に遅延リセットを通し、
+    # 月替わりなら 0 リセット＋期間更新＋限定推しの自動復帰を済ませる。
+    period = current_period_jst()
+    apply_monthly_reset(user, db, period)
+    old_mp = user.monthly_points
+    user.monthly_points = old_mp + points_added
+
+    # 旧→新の月間ptで跨いだ閾値ぶんを付与（同一 period・同一 threshold は重複付与しない）
+    granted = grant_rewards(user, old_mp, user.monthly_points, period, db)
 
     db.commit()
 
@@ -60,4 +77,6 @@ def receive_shipment_core(shipment: Shipment, db: Session) -> ReceiveResult:
         points_added=points_added,
         new_points=user.points,
         new_rank=user.rank,
+        monthly_points=user.monthly_points,
+        rewards_granted=[RewardGranted(**g) for g in granted],
     )

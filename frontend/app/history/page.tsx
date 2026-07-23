@@ -12,7 +12,29 @@ import GameButton from "@/components/GameButton";
 import { useToast } from "@/components/Toast";
 import { api, mediaUrl } from "@/lib/api";
 import { getStoredUser, storeUser } from "@/lib/session";
-import type { Device, Shipment } from "@/lib/types";
+import type { Device, RewardGranted, Shipment } from "@/lib/types";
+
+// 付与特典（複数可）を1つにまとめたトースト文面を作る（D-1 §3.1）。
+function rewardsToastMessage(granted: RewardGranted[]): string {
+  if (granted.length === 1) {
+    const type = granted[0].reward_type;
+    if (type === "limited_idol") return "期間限定推しが解放されたよ！";
+    if (type === "special_visual") return "特殊ビジュアルをゲットしたよ！";
+    return "握手会の抽選券をゲット！";
+  }
+  return `特典を${granted.length}個ゲット！ 詳しくはダイアログをチェック`;
+}
+
+// 特典種別ごとの達成ダイアログ用の説明（アイコン＋名称＋一言）。
+function rewardDialogLine(g: RewardGranted): { icon: string; note: string } {
+  if (g.reward_type === "limited_idol") {
+    return { icon: "🌸", note: "今月いっぱい /oshi で選べるよ" };
+  }
+  if (g.reward_type === "special_visual") {
+    return { icon: "✨", note: "ホームからいつでも切り替えられるよ" };
+  }
+  return { icon: "🎫", note: "抽選の権利がたまっていくよ" };
+}
 
 type Tab = "devices" | "shipments";
 
@@ -42,6 +64,12 @@ export default function HistoryPage() {
   const [shareTarget, setShareTarget] = useState<Shipment | null>(null);
   const [shareText, setShareText] = useState<string>("");
   const [shareLoading, setShareLoading] = useState(false);
+
+  // 特典達成演出: 付与された特典一覧と、演出を閉じた後に開くシェア対象
+  const [grantedRewards, setGrantedRewards] = useState<RewardGranted[] | null>(
+    null
+  );
+  const [pendingShare, setPendingShare] = useState<Shipment | null>(null);
 
   useEffect(() => {
     const user = getStoredUser();
@@ -119,19 +147,40 @@ export default function HistoryPage() {
         }
       }
 
-      // 続けて投稿する導線: そのままシェアダイアログを開く
+      // 続けて投稿する導線用の受領済み伝票
       const receivedSp: Shipment = {
         ...sp,
         status: "received",
         received_at: new Date().toISOString(),
       };
-      openShareDialog(receivedSp);
+
+      // 特典が付与されていたら達成演出（トースト→少し間をおいてダイアログ）を挟み、
+      // ダイアログを閉じたあとにシェアダイアログを開く（D-1 §3.3）。
+      const granted = result.rewards_granted ?? [];
+      if (granted.length > 0) {
+        show(`✨ ${rewardsToastMessage(granted)}`, "success");
+        setPendingShare(receivedSp);
+        setTimeout(() => setGrantedRewards(granted), 600);
+      } else {
+        // 特典なしなら従来どおりそのままシェアダイアログへ
+        openShareDialog(receivedSp);
+      }
     } catch (e) {
       const msg =
         e instanceof Error ? e.message : "検収の反映に失敗しました";
       show(msg);
     } finally {
       setReceivingId(null);
+    }
+  };
+
+  // 達成演出ダイアログを閉じ、続けてシェアダイアログを開く
+  const closeRewardDialog = () => {
+    setGrantedRewards(null);
+    if (pendingShare) {
+      const sp = pendingShare;
+      setPendingShare(null);
+      openShareDialog(sp);
     }
   };
 
@@ -364,6 +413,32 @@ export default function HistoryPage() {
         りなれすに端末が届いたことを確認したら押してね。
         <br />
         ポイントが反映されるよ✨
+      </GameDialog>
+
+      {/* 特典達成演出ダイアログ（rewards_granted があるとき） */}
+      <GameDialog
+        open={grantedRewards !== null && grantedRewards.length > 0}
+        title="とくてん げっとだよ！"
+        hideCancel
+        confirmLabel="うれしい！"
+        onConfirm={closeRewardDialog}
+        onCancel={closeRewardDialog}
+      >
+        <div className="flex flex-col gap-3 text-left">
+          {(grantedRewards ?? []).map((g, i) => {
+            const line = rewardDialogLine(g);
+            return (
+              <div key={`${g.tier}-${g.threshold}-${i}`}>
+                <p className="font-bold text-[var(--ink)]">
+                  {line.icon} {g.label} をゲット！
+                </p>
+                <p className="text-[12px] text-[var(--ink-soft)]">
+                  {line.note}
+                </p>
+              </div>
+            );
+          })}
+        </div>
       </GameDialog>
 
       {/* シェア投稿ダイアログ */}

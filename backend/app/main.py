@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
 
 from app.database import BASE_DIR, Base, SessionLocal, engine
+from app.migrate import run_migrations
 from app.routers import auth, devices, dev, faq, idols, shipments, users
 from app.seed import seed_all
 
@@ -56,8 +57,13 @@ if os.environ.get("ENABLE_DEV_API", "1") != "0":
 
 @app.on_event("startup")
 def on_startup():
-    """起動時にテーブル作成とseedデータ投入を行う。"""
+    """起動時にテーブル作成・軽量マイグレーション・seedデータ投入を行う。"""
+    # 1. 新規テーブル（user_rewards 等）を作成。既存テーブルの列追加はしない。
     Base.metadata.create_all(bind=engine)
+    # 2. 既存 DB に対して不足列（users/idols の新規列）を冪等に追加する。
+    #    seed が idols.is_limited を参照するため、seed より前に実行する。
+    run_migrations(engine)
+    # 3. seed（限定推しの upsert を含む・冪等）。
     db = SessionLocal()
     try:
         seed_all(db)
