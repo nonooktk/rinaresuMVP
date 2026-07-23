@@ -123,21 +123,65 @@ def _seed_idols(db: Session) -> None:
                 db.add(IdolComment(idol_id=idol.id, rank=rank, template=template))
 
 
-def _seed_device_types(db: Session) -> None:
-    """デバイス種別マスタを投入する。"""
-    if db.query(DeviceType).count() > 0:
-        return
+# デバイス種別マスタ（21種）の真実の源。
+#
+# 家庭から出るリチウムイオン電池内蔵の小型機器を、画像判定で弁別しやすい粒度で網羅する。
+# pt はリチウム含有量(g)中央値ベース（案B・×10＝0.1gで1pt・四捨五入・最低1pt保証）。
+# 換算式は Li当量(g) = 定格エネルギー(Wh) ÷ 12 ＝ 0.3 × 定格容量(Ah)（IATA/ICAO の危険物当量）。
+# 設計の正本と出典は 02_プロジェクト/rinaresu/DESIGN_li-battery-devices.md を参照。
+#
+# weight_g は旧方式（重量10g=1pt）の名残で、現在は pt 算定に使わない参考メモ（代表機器質量の概算）。
+# 既存6コード（smartphone/feature_phone/tablet/camera/portable_game/other）は互換のため code を維持し、
+# pt 値のみ新方式へ更新する（camera は label「デジタルカメラ」を維持、other は label を刷新）。
+DEVICE_TYPES: list[dict] = [
+    # --- 小型（Li < 0.5g 前後）---
+    {"code": "wireless_earbuds", "label": "ワイヤレスイヤホン", "weight_g": 55, "points": 1},
+    {"code": "smart_band_watch", "label": "スマートウォッチ・活動量計", "weight_g": 45, "points": 1},
+    {"code": "wireless_mouse_kbd", "label": "ワイヤレスマウス・キーボード", "weight_g": 100, "points": 1},
+    {"code": "e_cigarette", "label": "電子タバコ（VAPE）", "weight_g": 60, "points": 2},
+    {"code": "electric_toothbrush", "label": "電動歯ブラシ", "weight_g": 120, "points": 2},
+    {"code": "electric_shaver", "label": "電気シェーバー・バリカン", "weight_g": 180, "points": 3},
+    # --- 中型 ---
+    {"code": "handy_fan", "label": "ハンディファン・携帯扇風機", "weight_g": 200, "points": 6},
+    {"code": "heated_tobacco", "label": "加熱式タバコ", "weight_g": 120, "points": 6},
+    {"code": "feature_phone", "label": "ガラケー", "weight_g": 100, "points": 4},
+    {"code": "camera", "label": "デジタルカメラ", "weight_g": 300, "points": 4},
+    {"code": "mobile_router", "label": "モバイルルーター・ポケットWiFi", "weight_g": 120, "points": 9},
+    {"code": "bluetooth_speaker", "label": "Bluetoothスピーカー", "weight_g": 400, "points": 9},
+    {"code": "smartphone", "label": "スマートフォン", "weight_g": 170, "points": 12},
+    {"code": "portable_game", "label": "携帯ゲーム機", "weight_g": 250, "points": 13},
+    {"code": "tablet", "label": "タブレット", "weight_g": 450, "points": 22},
+    # --- 大型（Li 高含有）---
+    {"code": "drone", "label": "ドローン（ホビー用）", "weight_g": 400, "points": 25},
+    {"code": "mobile_battery", "label": "モバイルバッテリー", "weight_g": 250, "points": 31},
+    {"code": "laptop", "label": "ノートPC", "weight_g": 1400, "points": 42},
+    {"code": "cordless_vacuum", "label": "コードレス掃除機", "weight_g": 2500, "points": 50},
+    {"code": "power_tool", "label": "電動工具バッテリー", "weight_g": 650, "points": 60},
+    # --- フォールバック ---
+    {"code": "other", "label": "その他小型充電式機器", "weight_g": 100, "points": 5},
+]
 
-    device_types = [
-        {"code": "smartphone", "label": "スマートフォン", "weight_g": 170, "points": 17},
-        {"code": "feature_phone", "label": "ガラケー", "weight_g": 100, "points": 10},
-        {"code": "tablet", "label": "タブレット", "weight_g": 450, "points": 45},
-        {"code": "camera", "label": "デジタルカメラ", "weight_g": 300, "points": 30},
-        {"code": "portable_game", "label": "携帯ゲーム機", "weight_g": 250, "points": 25},
-        {"code": "other", "label": "その他小型家電", "weight_g": 100, "points": 10},
-    ]
-    for dt in device_types:
-        db.add(DeviceType(**dt))
+
+def _seed_device_types(db: Session) -> None:
+    """デバイス種別マスタ（21種）を code をキーに upsert する（冪等）。
+
+    従来は「1件でもあればスキップ」だったが、それだと既存 DB（本番・稼働中ローカル）に
+    新カテゴリが入らない。そこで _seed_limited_idol と同じ upsert 方式に変更する:
+    無い code は insert、既存 code は label/weight_g/points を最新化する。
+    毎起動で通るため、DEVICE_TYPES を書き換えて再起動すればマスタが最新化される。
+
+    - 純粋な ORM 操作のため SQLite / PostgreSQL 両対応。
+    - 既存デバイス（Device.points）は登録時スナップショットのため、ここでの pt 更新は
+      過去の登録分へ遡及しない（新規登録分から新 pt が適用される＝遡及なし移行）。
+    """
+    for dt in DEVICE_TYPES:
+        existing = db.get(DeviceType, dt["code"])
+        if existing is None:
+            db.add(DeviceType(**dt))
+        else:
+            existing.label = dt["label"]
+            existing.weight_g = dt["weight_g"]
+            existing.points = dt["points"]
 
 
 def _seed_faq(db: Session) -> None:
@@ -196,10 +240,11 @@ def _seed_faq(db: Session) -> None:
         {
             "category": "points",
             "question": "ポイントの計算方法を教えてください",
-            "keywords": "計算,何ポイント,ポイント数,重さ,重量",
+            "keywords": "計算,何ポイント,ポイント数,リチウム,電池",
             "answer": (
-                "{nickname}、目安は10gにつき1ポイントだよ！"
-                "デバイスの種類によって想定重量が決まっていて、それに応じてポイントが決まるんだ。"
+                "{nickname}、ポイントは端末に含まれるリチウム量の目安で決まるよ！"
+                "リチウムをたくさん含む端末（ノートPCやモバイルバッテリーなど）ほど高ポイント。"
+                "種類ごとにポイントが決まっていて、登録したときのポイントがそのまま付くんだ。"
             ),
         },
         {
