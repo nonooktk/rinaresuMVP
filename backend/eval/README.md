@@ -38,7 +38,8 @@ backend/eval/
 ## 実行方法（venv 必須）
 
 ```bash
-cd /Users/mitsuru/Desktop/rinaresu/backend
+# リポジトリルートから
+cd backend
 
 # Azure OpenAI の環境変数を読み込む（AZURE_OPENAI_ENDPOINT / _API_KEY / _DEPLOYMENT）
 source /path/to/openai.env
