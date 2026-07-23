@@ -21,9 +21,11 @@ backend/app/routers/idols.py（GET /api/idols/limited）から参照される。
 
 # 期間限定推し（7人目）。既存6人（backend/app/seed.py）と同型のデータ構造。
 # id はスラッグ。frontend/public/idols/{id}/ の立ち絵ディレクトリと対応する。
+# 2026-07-23: 正式アセット差し替え（統括承認済み）。旧プレースホルダー seira は
+# 互換のため idols テーブル行・アセットを残置（削除しない）。
 LIMITED_IDOL: dict[str, str] = {
-    "id": "seira",
-    "name": "星宮セイラ",
-    "theme_color": "#8a5cf0",  # 限定感のあるバイオレット
-    "catchphrase": "今月だけの特別なステージ、いっしょに輝こ？",
+    "id": "rinaresu",
+    "name": "眼鏡爆美女りなれす",
+    "theme_color": "#c2517d",  # ローズピンク
+    "catchphrase": "メガネの奥から、キミにロックオン♪",
 }
