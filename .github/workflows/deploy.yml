@@ -6,19 +6,15 @@
 name: deploy
 
 on:
-  # 手動デプロイ（タグを指定。例: v8）
+  # 手動デプロイ専用（タグを指定。例: v8）。
+  # push 自動デプロイは 2026-07-23 に撤去（統括判断）。デプロイは統括承認のうえ
+  # Actions タブから手動起動するか、CLAUDE.md「運用コマンド」の手動手順で行う。
   workflow_dispatch:
     inputs:
       tag:
         description: "イメージタグ（例: v8）。未指定時は sha-<短縮SHA> を自動採番"
         required: false
         type: string
-  # main への backend/frontend 変更で自動デプロイ
-  push:
-    branches: [main]
-    paths:
-      - backend/**
-      - frontend/**
 
 # 同時デプロイを禁止（Container App の単一レプリカ前提・整合性確保）。
 # 進行中のデプロイは中断せず、後続をキューイングする。
