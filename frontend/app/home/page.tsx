@@ -31,6 +31,9 @@ export default function HomePage() {
   const [ready, setReady] = useState(false);
   // 特殊ビジュアル切替の送信中フラグ（二度押し防止）
   const [visualSaving, setVisualSaving] = useState(false);
+  // 現在の推しが期間限定推し（7人目）かどうか。限定推しには special.png が無いため、
+  // ビジュアル切替（とくべつ）と special 表示を抑止して 404 ノイズを防ぐ（Q-1 Nit）。
+  const [onLimitedIdol, setOnLimitedIdol] = useState(false);
 
   // ホーム表示のたびにユーザー最新化＋コメント取得
   const load = useCallback(async () => {
@@ -66,11 +69,15 @@ export default function HomePage() {
       const found = idols.find((i) => i.id === currentIdolId);
       if (found) {
         setIdol(found);
+        setOnLimitedIdol(false);
       } else {
         // 通常一覧に無い＝期間限定推しを選択中。獲得者なら限定推し情報で解決する。
         try {
           const limited = await api.getLimitedIdol();
-          if (limited.id === currentIdolId) setIdol(limited);
+          if (limited.id === currentIdolId) {
+            setIdol(limited);
+            setOnLimitedIdol(true);
+          }
         } catch {
           /* 非保有(404)等では通常フォールバックのまま */
         }
@@ -127,8 +134,11 @@ export default function HomePage() {
   };
 
   const theme = idol?.theme_color ?? "#ff87b2";
-  const activeVisual = user?.active_visual === "special" ? "special" : "main";
-  const hasSpecialVisual = !!user?.rewards?.special_visual;
+  // 限定推しには special.png が無いため、special を選んでいても main を表示する（Q-1 Nit）。
+  const activeVisual =
+    user?.active_visual === "special" && !onLimitedIdol ? "special" : "main";
+  // 特殊ビジュアルトグルは T2 獲得済み かつ 限定推し以外のときのみ表示する。
+  const hasSpecialVisual = !!user?.rewards?.special_visual && !onLimitedIdol;
 
   if (!ready || !user) {
     return (

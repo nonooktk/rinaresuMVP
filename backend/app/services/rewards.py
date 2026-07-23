@@ -47,7 +47,12 @@ def crossed_thresholds(old_mp: int, new_mp: int) -> list[int]:
     """月間ptが old_mp → new_mp へ増えたときに跨いだ閾値を昇順で返す。
 
     「跨いだ」= old_mp < threshold <= new_mp。減少（old>=new）や据え置きは空リスト。
+
+    【B2-2 対応】old 側を 0 でクランプする。現状 monthly_points が負になる経路は
+    無いが、将来 pt 減算機能等が入ったとき `first = (old//1000+1)*1000` が負→
+    threshold 0 を誤って列挙する（T3抽選券の余分付与）ため、防御的に下限を 0 に固定する。
     """
+    old_mp = max(old_mp, 0)
     if new_mp <= old_mp:
         return []
 
