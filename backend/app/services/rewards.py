@@ -98,6 +98,12 @@ def grant_rewards(
       UNIQUE 制約と事前チェックの二重で重複付与を防ぐ）。
     - この関数は flush までを行い、commit は呼び出し側（受領処理）に委ねる。
     - 返り値: [{"tier","threshold","reward_type","label"}, ...]（付与順・昇順）
+
+    【B-1 対応】並行受領で UNIQUE(user_id, threshold, period) が衝突した場合でも、
+    受領処理本体（shipment/device の受領化・累計pt・月間pt）を巻き戻さないよう、
+    各報酬 INSERT を **savepoint（begin_nested）で隔離**する。衝突時はその savepoint
+    だけをロールバックして次の閾値へ進み、外側トランザクションは無傷に保つ。
+    （従来は db.rollback() が受領処理全体を巻き戻していた＝Blocker）
     """
     granted: list[dict] = []
 
@@ -118,19 +124,23 @@ def grant_rewards(
 
         tier = tier_of_threshold(threshold)
         reward_type = REWARD_TYPE_BY_TIER[tier]
-        reward = UserReward(
-            user_id=user.id,
-            tier=tier,
-            threshold=threshold,
-            period=period,
-            reward_type=reward_type,
-        )
-        db.add(reward)
+
         try:
-            # UNIQUE(user_id, threshold, period) 制約違反を早期検知する（並行付与の保険）。
-            db.flush()
+            # savepoint 内で INSERT。UNIQUE 違反（並行付与の競合）が起きても、
+            # ここで生成した savepoint だけがロールバックされ、受領本体は残る。
+            with db.begin_nested():
+                db.add(
+                    UserReward(
+                        user_id=user.id,
+                        tier=tier,
+                        threshold=threshold,
+                        period=period,
+                        reward_type=reward_type,
+                    )
+                )
+                db.flush()
         except IntegrityError:
-            db.rollback()
+            # 競合＝別リクエストが同一特典を先に付与済み。二重付与しないだけで受領は続行。
             continue
 
         granted.append(

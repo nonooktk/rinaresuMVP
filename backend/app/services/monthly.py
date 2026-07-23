@@ -77,3 +77,19 @@ def apply_monthly_reset(user: User, db: Session, period: str | None = None) -> b
         changed = True
 
     return changed
+
+
+def sync_monthly(user: User, db: Session, period: str) -> bool:
+    """遅延リセットを適用し、変更があれば commit する（GET/認証/参照系の共通口）。
+
+    【M-2/H-1 対応】呼び出し側でリクエスト冒頭に `period = current_period_jst()` を
+    一度だけ確定し、この関数と後続の特典判定・レスポンス構築へ**同じ period** を渡すことで、
+    JST月末境界での「リセット対象月」と「T1判定月」の不整合を防ぐ。
+    受領処理（receiving.py）は末尾で一括 commit するため、ここではなく
+    apply_monthly_reset を直接呼ぶ（この関数は単独 commit する参照系専用）。
+    """
+    changed = apply_monthly_reset(user, db, period)
+    if changed:
+        db.commit()
+        db.refresh(user)
+    return changed

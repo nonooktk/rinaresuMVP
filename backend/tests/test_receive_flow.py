@@ -143,10 +143,10 @@ def test_limited_idol_selection_requires_t1(client, db, make_user):
     assert refreshed["idol_id"] == LIMITED_IDOL["id"]
 
 
-def test_limited_idol_not_in_public_list_but_available_via_limited_endpoint(client):
+def test_limited_idol_not_in_public_list(client):
+    """通常一覧（GET /api/idols）に期間限定推しは出ない（6人のみ）。"""
     idols = client.get("/api/idols").json()
     ids = [i["id"] for i in idols]
     assert LIMITED_IDOL["id"] not in ids
     assert len(ids) == 6
-    limited = client.get("/api/idols/limited").json()
-    assert limited["id"] == LIMITED_IDOL["id"]
+    # 限定推し取得エンドポイントの詳細な認可は test_r1_fixes.py で検証する

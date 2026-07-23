@@ -45,20 +45,36 @@ export default function HomePage() {
     const fb = FALLBACK_IDOLS.find((i) => i.id === stored.idol_id) ?? null;
     setIdol(fb);
 
-    // ユーザー最新化
+    // ユーザー最新化。月替わりで限定推しから自動復帰していることがあるため、
+    // 以降のアイドル解決は必ず「再取得後の idol_id」を基準にする（H-4）。
+    let currentIdolId = stored.idol_id;
     try {
       const fresh = await api.getUser(stored.id);
       setUser(fresh);
       storeUser(fresh);
+      currentIdolId = fresh.idol_id;
+      // フォールバック表示も最新 idol_id に合わせて更新
+      const fb2 = FALLBACK_IDOLS.find((i) => i.id === currentIdolId) ?? null;
+      if (fb2) setIdol(fb2);
     } catch {
       // 取得失敗時は保存済みを使う（トーストは控えめに）
     }
 
-    // アイドル一覧（テーマカラー等の最新化）
+    // アイドル一覧（テーマカラー等の最新化）。再取得後の idol_id で解決する。
     try {
       const idols = await api.getIdols();
-      const found = idols.find((i) => i.id === stored.idol_id);
-      if (found) setIdol(found);
+      const found = idols.find((i) => i.id === currentIdolId);
+      if (found) {
+        setIdol(found);
+      } else {
+        // 通常一覧に無い＝期間限定推しを選択中。獲得者なら限定推し情報で解決する。
+        try {
+          const limited = await api.getLimitedIdol();
+          if (limited.id === currentIdolId) setIdol(limited);
+        } catch {
+          /* 非保有(404)等では通常フォールバックのまま */
+        }
+      }
     } catch {
       /* フォールバック済み */
     }

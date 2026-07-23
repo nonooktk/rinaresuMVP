@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.limited_idol import LIMITED_IDOL
 from app.models import Device, Idol, IdolComment, Shipment, User
 from app.schemas import (
     AuthSessionOut,
@@ -22,19 +23,25 @@ from app.schemas import (
 )
 from app.deps import get_current_user
 from app.services.google_auth import verify_google_credential
-from app.services.monthly import apply_monthly_reset, current_period_jst, is_limited_idol
+from app.services.monthly import (
+    apply_monthly_reset,
+    current_period_jst,
+    is_limited_idol,
+    sync_monthly,
+)
 from app.services.rewards import next_reward, rewards_status
 from app.services.session_token import issue_session_token
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-def _build_user_detail(user: User, db: Session) -> UserDetailOut:
+def _build_user_detail(user: User, db: Session, period: str) -> UserDetailOut:
     """ユーザーの特典状況（次特典・保有状況）を含む詳細レスポンスを組み立てる。
 
-    呼び出し前に apply_monthly_reset を通し、月間ptが当月に整合していることを前提とする。
+    【M-2 対応】period はリクエスト冒頭で一度だけ確定した JST 月を受け取り、
+    reset・特典判定・レスポンス構築で同じ値を使う（月末境界の不整合を防ぐ）。
+    呼び出し前に遅延リセットを通し、月間ptが当月に整合していることを前提とする。
     """
-    period = current_period_jst()
     nr = next_reward(user.monthly_points)
     rs = rewards_status(user, db, period)
     return UserDetailOut(
@@ -150,9 +157,10 @@ def update_me(
             detail="変更内容がありません",
         )
 
-    # 参照・変更の前に遅延リセットを通す（限定推しの有効判定は当月ベースで行うため）
-    apply_monthly_reset(current_user, db)
+    # 【M-2 対応】リクエスト冒頭で JST period を一度だけ確定し、reset・判定に同じ値を使う。
     period = current_period_jst()
+    # 参照・変更の前に遅延リセットを通す（限定推しの有効判定は当月ベースで行うため）
+    apply_monthly_reset(current_user, db, period)
 
     # ---- 推し変更 ----
     if payload.idol_id is not None:
@@ -164,9 +172,19 @@ def update_me(
             )
 
         currently_limited = is_limited_idol(current_user.idol_id, db)
+        # 【H-2 対応】選べる限定推しは「現在の LIMITED_IDOL（今月の7人目）」のみ。
+        # 過去に別 slug で運用した限定推し行（is_limited=True）は選択不可にする。
+        is_current_limited = target.id == LIMITED_IDOL["id"]
 
-        if target.is_limited:
-            # 期間限定推しは T1（当月）獲得済みでなければ選べない
+        if target.is_limited and not is_current_limited:
+            # 過去の期間限定推し → 現在は選べない
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="この期間限定推しは現在選べません",
+            )
+
+        if is_current_limited:
+            # 期間限定推し（今月の7人目）は T1（当月）獲得済みでなければ選べない
             rs = rewards_status(current_user, db, period)
             if not rs["limited_idol_active"]:
                 raise HTTPException(
@@ -201,7 +219,7 @@ def update_me(
 
     db.commit()
     db.refresh(current_user)
-    return _build_user_detail(current_user, db)
+    return _build_user_detail(current_user, db, period)
 
 
 @router.get("/{user_id}", response_model=UserDetailOut)
@@ -221,12 +239,12 @@ def get_user(
     if user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ユーザーが見つかりません")
 
+    # 【M-2 対応】period を一度だけ確定し、reset・詳細構築で同じ値を使う。
+    period = current_period_jst()
     # 参照前に遅延リセットを適用（月替わりなら 0 リセット＋限定推し自動復帰）
-    if apply_monthly_reset(current_user, db):
-        db.commit()
-        db.refresh(current_user)
+    sync_monthly(current_user, db, period)
 
-    return _build_user_detail(current_user, db)
+    return _build_user_detail(current_user, db, period)
 
 
 @router.get("/{user_id}/comment", response_model=CommentOut)

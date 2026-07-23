@@ -74,14 +74,25 @@ export default function OshiPage() {
         if (!alive) return;
         setUser(fresh);
         storeUser(fresh);
+        // 【H-3 対応】サーバー側で月替わり自動復帰した場合に備え、選択状態も最新の
+        // idol_id へ揃える（旧限定 slug が選択されたまま 403 で詰むのを防ぐ）。
+        setSelectedId(fresh.idol_id);
         if (fresh.rewards?.limited_idol_active) {
           setLimitedActive(true);
           try {
             const limited = await api.getLimitedIdol();
             if (alive) setLimitedIdol(limited);
           } catch {
-            /* 限定推しの取得失敗時は通常6人のみ表示 */
+            // 限定推しの取得失敗（非保有=404 含む）時は限定枠を出さない
+            if (alive) {
+              setLimitedActive(false);
+              setLimitedIdol(null);
+            }
           }
+        } else {
+          // T1 が当月無効なら限定関連 state を明示的にクリアする
+          setLimitedActive(false);
+          setLimitedIdol(null);
         }
       } catch {
         /* 取得失敗時は保存済みユーザーで続行（限定推しは出さない） */
