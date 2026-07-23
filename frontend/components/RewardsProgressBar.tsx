@@ -60,12 +60,6 @@ export default function RewardsProgressBar({
     setDays(daysUntilMonthEndJST());
   }, []);
 
-  // 直近で狙う T3 の閾値（未達なら next_reward、達成済みなら現在ptの1つ上の1000刻み）
-  const nextT3 =
-    nextReward && nextReward.tier === "T3"
-      ? nextReward.threshold
-      : (Math.floor(mp / 1000) + 1) * 1000;
-
   const milestones: Milestone[] = [
     {
       key: "T1",
@@ -119,11 +113,13 @@ export default function RewardsProgressBar({
     // 次目標が取れない場合の安全なフォールバック
     copy = allTierDone ? "ここからはボーナスタイムだよ♪" : "いっしょに集めよ、応援してるよ♪";
   } else if (allTierDone) {
-    // 状態D: 当月全特典コンプ後（次の🎫まで）— 最優先で毎回表示
+    // 状態D: 当月全特典コンプ後（T3積み上げ中）— 最優先で毎回表示。
+    // 当月チケット保有ありのときのみ「次の」を付ける（0枚のときは1枚目なので「次の」を外す）。
+    const nextPrefix = tickets > 0 ? "次の" : "";
     copy =
       days === 0
-        ? `今日まで！あと${remaining}ptで🎫握手会抽選券、間に合うよ！`
-        : `${daysPrefix}あと${remaining}ptで🎫次の握手会抽選券！`;
+        ? `今日まで！あと${remaining}ptで🎫${nextPrefix}握手会抽選券、間に合うよ！`
+        : `${daysPrefix}あと${remaining}ptで🎫${nextPrefix}握手会抽選券！`;
   } else if (progressRatio >= 0.7) {
     // 状態B: あと少し
     copy =
@@ -269,19 +265,16 @@ export default function RewardsProgressBar({
                   </span>
                 )}
               </div>
-              {/* 1行目: アイコン+閾値 */}
-              <span
-                className={`whitespace-nowrap text-[10px] font-bold ${
-                  isT3 ? "text-[#b8860b]" : "text-[var(--ink-soft)]"
-                }`}
-              >
+              {/* 1行目: アイコン+閾値。ラベル文字は小サイズ帯のためコントラスト重視で
+                  T3 も --ink-soft（4.71:1）に統一する（ゴールドは枠・アイコン・バッジ・きらめきで表現・D-2 §6/QA F1）。 */}
+              <span className="whitespace-nowrap text-[10px] font-bold text-[var(--ink-soft)]">
                 {m.thresholdLabel}
               </span>
               {/* 2行目: 短縮特典名（最小9px。白カード上×--ink-soft でコントラスト担保・D-1 §5） */}
               <span
-                className={`whitespace-nowrap text-[9px] font-bold ${
-                  isT3 ? "text-[#b8860b]" : "text-[var(--ink-soft)]"
-                } ${!m.reached && !isT3 ? "opacity-60" : ""}`}
+                className={`whitespace-nowrap text-[9px] font-bold text-[var(--ink-soft)] ${
+                  !m.reached && !isT3 ? "opacity-60" : ""
+                }`}
               >
                 {m.label}
               </span>
