@@ -185,10 +185,16 @@ def _seed_device_types(db: Session) -> None:
 
 
 def _seed_faq(db: Session) -> None:
-    """FAQエントリを投入する（送付方法・ポイント・データ消去の3カテゴリ各3件以上）。"""
-    if db.query(FaqEntry).count() > 0:
-        return
+    """FAQエントリを question をキーに upsert する（冪等）。
 
+    従来は「1件でもあればスキップ」だったが、それだと既存 DB（本番・稼働中ローカル）の
+    FAQ 回答文がコード側の更新に追従しない（例: ポイント計算の説明が旧「10gにつき1pt」の
+    まま残る＝ユーザー向けの誤情報）。そこで question を一致キーに update/insert する:
+    同じ question の行があれば category/keywords/answer を最新化、無ければ insert。
+    毎起動で通るため、コードの faq_data を書き換えて再起動すれば既存 DB も最新化される。
+
+    - question は seed データ内で一意（実質のキー）。純 ORM 操作で SQLite/PostgreSQL 両対応。
+    """
     faq_data = [
         # ---------- 送付方法 ----------
         {
@@ -242,9 +248,11 @@ def _seed_faq(db: Session) -> None:
             "question": "ポイントの計算方法を教えてください",
             "keywords": "計算,何ポイント,ポイント数,リチウム,電池",
             "answer": (
-                "{nickname}、ポイントは端末に含まれるリチウム量の目安で決まるよ！"
-                "リチウムをたくさん含む端末（ノートPCやモバイルバッテリーなど）ほど高ポイント。"
-                "種類ごとにポイントが決まっていて、登録したときのポイントがそのまま付くんだ。"
+                "{nickname}、ポイントは端末の種類ごとに、内蔵リチウムイオン電池の"
+                "リチウム量の目安（0.1gにつき1pt）をもとに決まるよ！"
+                "リチウムを多く含む機器ほど高ポイント（例: スマートフォン12pt・"
+                "モバイルバッテリー31pt・ノートPC42pt）。"
+                "付与は、りなれすに届いて確認できたあとだよ。"
             ),
         },
         {
@@ -295,4 +303,12 @@ def _seed_faq(db: Session) -> None:
         },
     ]
     for faq in faq_data:
-        db.add(FaqEntry(**faq))
+        existing = (
+            db.query(FaqEntry).filter(FaqEntry.question == faq["question"]).first()
+        )
+        if existing is None:
+            db.add(FaqEntry(**faq))
+        else:
+            existing.category = faq["category"]
+            existing.keywords = faq["keywords"]
+            existing.answer = faq["answer"]
