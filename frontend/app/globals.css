@@ -131,6 +131,29 @@ body {
   animation: glowPulse 1.6s ease-in-out infinite;
 }
 
+/* T3（握手会抽選券）達成後のゆっくりしたゴールドきらめき。
+   点滅（blink）は使わず、3秒周期の穏やかな opacity フェードのみ（DESIGN_D-2 §2）。 */
+@keyframes goldFade {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.animate-gold-fade {
+  animation: goldFade 3s ease-in-out infinite;
+}
+
+/* 動きに敏感なユーザー向け: アニメーションを無効化し静的なゴールド表現にフォールバック（DESIGN_D-2 §2/§6）。 */
+@media (prefers-reduced-motion: reduce) {
+  .animate-gold-fade {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
 /* スクロールバーを控えめに */
 * {
   scrollbar-width: thin;
