@@ -70,6 +70,10 @@ class UserDetailOut(UserOut):
     """GET /api/users/{id} 用。UserOut に特典の集計情報を足した詳細レスポンス。"""
     next_reward: NextReward | None = None
     rewards: RewardsStatus
+    # 毎日ログインボーナス（新規・**後方互換の追加のみ**）。
+    # 当日（JST）ぶんが未受領なら True。ホームはこの1フィールドだけで
+    # オーバーレイの表示要否を判断できる（専用 GET を増やさずリクエスト数を抑える）。
+    login_bonus_available: bool = False
 
 
 # ---------- Auth（Google 認証） ----------
@@ -210,3 +214,18 @@ class ReceiveResult(BaseModel):
     # ---------- pt特典プログラム（新規・後方互換の追加のみ） ----------
     monthly_points: int = 0                          # 受領後の当月月間pt
     rewards_granted: list[RewardGranted] = []        # この受領で新規付与された特典
+
+
+# ---------- 毎日ログインボーナス ----------
+class LoginBonusClaimOut(BaseModel):
+    """POST /api/login-bonus/claim のレスポンス。
+
+    リクエストボディは無い（pt も user_id も受け取らない＝抽選はサーバー側のみ・
+    対象は通行証から解決した本人のみ）。本日受領済みでもエラーにはせず
+    200＋`granted=false` を返す。
+    """
+    granted: bool                                    # 今回付与できたか（false=本日受領済み）
+    points: int = 0                                  # 今回付与した pt（granted=false なら 0）
+    monthly_points: int = 0                          # 付与後の当月月間pt
+    next_reward: NextReward | None = None            # 次に狙う特典（積み上げ表示用）
+    rewards_granted: list[RewardGranted] = []        # この付与で新規獲得した特典（閾値跨ぎ）

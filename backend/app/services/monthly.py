@@ -138,6 +138,25 @@ def atomic_add_points(db: Session, user_id: int, points_added: int) -> None:
     )
 
 
+def atomic_add_monthly_points(db: Session, user_id: int, points_added: int) -> None:
+    """**月間ptのみ**を原子的 UPDATE で加算する（累計pt・ランクには触れない）。
+
+    毎日ログインボーナス（LB-2）用。既存 `atomic_add_points` は累計 `points` と
+    `monthly_points` の両方を加算するため、「月間ptだけ動かし累計pt・ランクは
+    変えない」という統括確定仕様には使えない。よって**既存関数は一切変更せず**、
+    月間pt専用の加算口をここに新設する（受領フローの挙動を巻き込まないため）。
+
+    実装様式は `atomic_add_points` と同じ `SET monthly_points = monthly_points + :v` の
+    単一 UPDATE。SQLite（書込ロック下で原子実行）・PostgreSQL（行更新の原子性）とも
+    ロストアップデートを排除できる。commit は呼び出し側に委ねる。
+    """
+    db.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(monthly_points=User.monthly_points + points_added)
+    )
+
+
 def sync_monthly(user: User, db: Session, period: str) -> bool:
     """遅延リセットを適用し、変更があれば commit する（GET/認証/参照系の共通口）。
 

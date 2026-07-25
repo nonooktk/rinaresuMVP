@@ -5,7 +5,7 @@
 // - 中央: 推しアイドルの大きなイラスト
 // - 上部: 吹き出しコメント（表示のたびに GET /api/users/{id}/comment）
 // - 下部: メニュー各種＋ログアウト（確認ダイアログ）
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ScreenFrame from "@/components/ScreenFrame";
 import Sparkles from "@/components/Sparkles";
@@ -14,11 +14,13 @@ import GameDialog from "@/components/GameDialog";
 import SpeechBubble from "@/components/SpeechBubble";
 import RankBadge from "@/components/RankBadge";
 import IdolImage from "@/components/IdolImage";
+import LoginBonusOverlay from "@/components/LoginBonusOverlay";
+import RewardDialog, { rewardsToastMessage } from "@/components/RewardDialog";
 import RewardsProgressBar from "@/components/RewardsProgressBar";
 import { useToast } from "@/components/Toast";
 import { api, ApiError } from "@/lib/api";
 import { clearUser, getStoredUser, storeUser } from "@/lib/session";
-import type { Idol, User } from "@/lib/types";
+import type { Idol, LoginBonusResult, RewardGranted, User } from "@/lib/types";
 import { FALLBACK_IDOLS } from "@/lib/idols";
 
 export default function HomePage() {
@@ -31,6 +33,17 @@ export default function HomePage() {
   const [ready, setReady] = useState(false);
   // 特殊ビジュアル切替の送信中フラグ（二度押し防止）
   const [visualSaving, setVisualSaving] = useState(false);
+
+  // ---------- 毎日ログインボーナス（LB-10） ----------
+  // 表示可否は **サーバーの login_bonus_available（当日ぶん未受領なら true）だけ** で決める。
+  // localStorage の保存値は古い可能性があるため使わない。
+  const [loginBonusOpen, setLoginBonusOpen] = useState(false);
+  // 1回のマウントで最大1度しか出さない（claim 後の再取得で再表示されないように）
+  const loginBonusShownRef = useRef(false);
+  // ログインボーナスで閾値を跨いだときの達成演出（history と同じ RewardDialog を共用）
+  const [grantedRewards, setGrantedRewards] = useState<RewardGranted[] | null>(
+    null
+  );
 
   // ホーム表示のたびにユーザー最新化＋コメント取得
   const load = useCallback(async () => {
@@ -56,6 +69,13 @@ export default function HomePage() {
       // フォールバック表示も最新 idol_id に合わせて更新
       const fb2 = FALLBACK_IDOLS.find((i) => i.id === currentIdolId) ?? null;
       if (fb2) setIdol(fb2);
+
+      // 当日ぶんが未受領ならログインボーナスのオーバーレイを出す（1マウント1回まで）。
+      // 判定は必ず**再取得したサーバー値**で行う（保存済みユーザーは古い可能性がある）。
+      if (fresh.login_bonus_available === true && !loginBonusShownRef.current) {
+        loginBonusShownRef.current = true;
+        setLoginBonusOpen(true);
+      }
     } catch {
       // 取得失敗時は保存済みを使う（トーストは控えめに）
     }
@@ -125,6 +145,45 @@ export default function HomePage() {
       setVisualSaving(false);
     }
   };
+
+  // ログインボーナスの結果表示を閉じたとき（LB-10 ②③）。
+  // claim 済みなら結果が渡る。Esc 等で claim 前に離脱した場合は null（翌アクセスで再表示）。
+  const handleLoginBonusFinish = useCallback(
+    async (result: LoginBonusResult | null) => {
+      setLoginBonusOpen(false);
+      if (!result) return;
+
+      // 月間pt・特典プログレスバー・login_bonus_available を最新化する
+      const stored = getStoredUser();
+      if (stored) {
+        try {
+          const fresh = await api.getUser(stored.id);
+          setUser(fresh);
+          storeUser(fresh);
+        } catch {
+          // 再取得に失敗しても付与自体は完了している。次回のホーム表示で整合する
+        }
+      }
+
+      // 閾値を跨いでいたら、履歴画面と同じ間合い（トースト → 600ms → ダイアログ）で
+      // 達成演出へ接続する（DESIGN_D-3 §5.1）。結果表示とは同居させない。
+      const granted = result.rewards_granted ?? [];
+      if (granted.length > 0) {
+        window.setTimeout(() => {
+          show(`✨ ${rewardsToastMessage(granted)}`, "success");
+          window.setTimeout(() => setGrantedRewards(granted), 600);
+        }, 300);
+      }
+    },
+    [show]
+  );
+
+  // claim 失敗・タイムアウト時（LB-10 ④）。
+  // ホーム画面は壊さず、トーストで知らせてオーバーレイだけ閉じる。
+  const handleLoginBonusFail = useCallback(() => {
+    setLoginBonusOpen(false);
+    show("うまく受け取れなかったみたい…また来てね");
+  }, [show]);
 
   const theme = idol?.theme_color ?? "#ff87b2";
   // 特殊ビジュアル（T2）獲得済みなら、限定推しを含めどの推しでも special 表示・切替可。
@@ -284,6 +343,26 @@ export default function HomePage() {
         <br />
         あなたのデータは残っているよ。
       </GameDialog>
+
+      {/* 毎日ログインボーナス。login_bonus_available が true のときだけマウントする
+          （false のときは一切マウントしない＝ホームの表示コストを増やさない）。
+          ユーザー取得後にのみ描画されるため、ハイドレーション不整合は起きない。 */}
+      {loginBonusOpen && (
+        <LoginBonusOverlay
+          user={user}
+          idolName={idol?.name}
+          themeColor={theme}
+          onFinish={handleLoginBonusFinish}
+          onFail={handleLoginBonusFail}
+        />
+      )}
+
+      {/* ログインボーナスで閾値を跨いだときの達成演出（history と共用・LB-7） */}
+      <RewardDialog
+        open={grantedRewards !== null}
+        granted={grantedRewards ?? []}
+        onClose={() => setGrantedRewards(null)}
+      />
     </ScreenFrame>
   );
 }

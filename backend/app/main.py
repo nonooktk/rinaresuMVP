@@ -17,7 +17,16 @@ from fastapi import FastAPI
 
 from app.database import BASE_DIR, Base, SessionLocal, engine
 from app.migrate import run_migrations
-from app.routers import auth, devices, dev, faq, idols, shipments, users
+from app.routers import (
+    auth,
+    devices,
+    dev,
+    faq,
+    idols,
+    login_bonus,
+    shipments,
+    users,
+)
 from app.seed import seed_all
 
 app = FastAPI(title="りなれす API", description="都市鉱山回収促進アプリ りなれす バックエンドAPI")
@@ -49,6 +58,7 @@ app.include_router(users.router)
 app.include_router(devices.router)
 app.include_router(shipments.router)
 app.include_router(faq.router)
+app.include_router(login_bonus.router)
 
 # 開発用ルーターは ENABLE_DEV_API が "0" の場合は登録しない（本番での無効化用）
 if os.environ.get("ENABLE_DEV_API", "1") != "0":

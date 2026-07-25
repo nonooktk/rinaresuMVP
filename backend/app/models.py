@@ -174,3 +174,33 @@ class UserReward(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="rewards")
+
+
+class LoginBonus(Base):
+    """毎日ログインボーナスの受領履歴（1レコード＝1ユーザー1日分）。
+
+    その日（JST）の初回ホーム表示で 1pt / 5pt / 10pt のいずれかを月間ptへ付与し、
+    その事実をこのテーブルに1行だけ残す。
+
+    - bonus_date: 付与対象日（"YYYY-MM-DD"・**JST基準**）。
+      JST 文字列で持つことで、DB のタイムゾーン設定（SQLite/PostgreSQL）に依存せず
+      「その日に受け取ったか」を一意に判定できる。
+    - points: 実際に付与した pt（1 / 5 / 10）。抽選はサーバー側のみで行う。
+
+    **UNIQUE(user_id, bonus_date) が多重付与防止の最後の砦**。アプリ側の事前チェックは
+    並行リクエストをすり抜けるため、DB 制約で「1ユーザー1日1回」を保証する
+    （INSERT は savepoint で隔離し、IntegrityError＝本日受領済みとして扱う）。
+
+    新規テーブルのため `Base.metadata.create_all()` で作成される。
+    既存テーブルへの列追加ではないので `app/migrate.py` への ALTER 追加は不要。
+    """
+    __tablename__ = "login_bonuses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "bonus_date", name="uq_login_bonus_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    bonus_date: Mapped[str] = mapped_column(String(10), nullable=False)  # "YYYY-MM-DD"（JST）
+    points: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

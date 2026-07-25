@@ -39,6 +39,9 @@ export interface User {
   active_visual?: string; // "main" / "special"
   next_reward?: NextReward | null; // 次に狙う特典（詳細レスポンスのみ）
   rewards?: RewardsStatus; // 特典保有状況（詳細レスポンスのみ）
+  // 当日（JST）ぶんの毎日ログインボーナスが未受領なら true（詳細レスポンスのみ）。
+  // ホームはこの1フィールドだけでオーバーレイの表示要否を判断する。
+  login_bonus_available?: boolean;
 }
 
 // POST /api/auth/google のレスポンス
@@ -136,6 +139,15 @@ export interface ReceiveResult {
   new_rank: number;
   monthly_points?: number; // 受領後の当月月間pt（後方互換の任意フィールド）
   rewards_granted?: RewardGranted[]; // この受領で新規付与された特典（無ければ空）
+}
+
+// POST /api/login-bonus/claim のレスポンス（毎日ログインボーナス）
+export interface LoginBonusResult {
+  granted: boolean; // 今回付与できたか（false = 本日受領済み）
+  points: number; // 今回付与された pt（1 / 5 / 10。granted=false なら 0）
+  monthly_points: number; // 付与後の当月月間pt（積み上げ表示に使う）
+  next_reward?: NextReward | null; // 次に狙う特典（積み上げ表示に使う）
+  rewards_granted?: RewardGranted[]; // この付与で新規獲得した特典（閾値跨ぎ）
 }
 
 // シェア投稿文面

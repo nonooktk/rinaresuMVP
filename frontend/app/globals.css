@@ -146,11 +146,66 @@ body {
   animation: goldFade 3s ease-in-out infinite;
 }
 
-/* 動きに敏感なユーザー向け: アニメーションを無効化し静的なゴールド表現にフォールバック（DESIGN_D-2 §2/§6）。 */
+/* 毎日ログインボーナス: 封筒のふたが開く（DESIGN_D-3 §4.3・LB-9）。
+   rotateX + perspective は SVG 子要素での挙動にブラウザ差が出るため、
+   2D の scaleY で表現する（1 → 0＝真横＝紙の厚みゼロ → -1＝反転＝開いた状態）。 */
+@keyframes envelopeOpen {
+  0% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(-1);
+  }
+}
+.animate-envelope-open {
+  /* SVG 要素は既定で viewBox 原点基準になるため、自身のバウンディングボックス上端を軸にする */
+  transform-box: fill-box;
+  transform-origin: top center;
+  animation: envelopeOpen 0.45s ease-out forwards;
+}
+
+/* 毎日ログインボーナス: ハートが下から舞い上がる（DESIGN_D-3 §4.3・LB-9）。
+   横ズレ --dx / 回転 --rot は呼び出し側が固定配列からインラインで渡す
+   （レンダー中に Math.random() を使わない＝ハイドレーション不整合の回避）。 */
+@keyframes heartFloat {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.5);
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx, 0px), -120px) scale(1) rotate(var(--rot, 0deg));
+  }
+}
+.animate-heart-float {
+  animation: heartFloat 0.85s ease-out forwards;
+}
+
+/* 動きに敏感なユーザー向け: アニメーションを無効化し静的な表現にフォールバック
+   （DESIGN_D-2 §2/§6・DESIGN_D-3 §4.5）。
+   ※ ログインボーナスの「演出の待ち時間 1200ms → 300ms」は CSS では消せないため、
+     LoginBonusOverlay.tsx が matchMedia で JS 側の待ち時間も切り替える（D-3 §4.5）。 */
 @media (prefers-reduced-motion: reduce) {
   .animate-gold-fade {
     animation: none;
     opacity: 0.85;
+  }
+  /* 封筒のふた: 動かさず「開いた状態」で静止させる（情報は同じだけ見せる） */
+  .animate-envelope-open {
+    animation: none;
+    transform: scaleY(-1);
+  }
+  /* ハート: 舞い上がらせず、封筒の上に扇状（--dx）で静止表示する */
+  .animate-heart-float {
+    animation: none;
+    opacity: 0.9;
+    transform: translate(var(--dx, 0px), -70px) rotate(var(--rot, 0deg));
   }
 }
 
