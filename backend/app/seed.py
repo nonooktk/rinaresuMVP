@@ -10,10 +10,16 @@
 `_seed_device_types` / `_seed_faq` で実績のある upsert 方式にそろえ、
 **再起動するだけで既存 DB も最新の文言へ移行する**ようにしている（DESIGN_D-4 §8 #2）。
 """
+import logging
+
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.limited_idol import LIMITED_IDOL
 from app.models import DeviceType, FaqEntry, Idol, IdolComment, IdolLoginLine
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- アイドル名簿
 
@@ -273,13 +279,190 @@ DEFAULT_LOGIN_LINES: dict[str, str] = {
     "already": "今日のぶんは もう受け取ってるみたい…！ また明日ね♡",
 }
 
+# ---------------------------------------------------------------- 入力の正規化
+
+# 有効なランク（吹き出しは 1〜3 のみ。ユーザーの rank カラムと対応する）
+VALID_RANKS = (1, 2, 3)
+
+
+def _normalize_login_lines(idol_id: str, raw: object) -> dict[str, str]:
+    """運営が書いたログボ文言を検証し、安全な形に正規化する。
+
+    【QA_Q-8 M-1 対応】従来は `IdolLoginLine(idol_id=..., **lines)` と**無検証で展開**していたため、
+    運営が `limited_idol.py` を書き間違えると **バックエンドが起動不能**になっていた。
+      - キーを1つ落とす → `IntegrityError: NOT NULL constraint failed` で `on_startup` 失敗
+      - キー名のタイポ（`greet_1`）→ `TypeError: invalid keyword argument` で同じく起動不能
+      - 一方「キーを丸ごと省略」は DEFAULT に落ちて救われる、という非対称があった
+    運営が現実に踏むのは「5つ書いて1つ忘れる」側なので、**壊れない側へ倒す**
+    （DESIGN_D-4 §6.2 原則2「文言を用意し忘れても画面は壊れない」）。
+
+    さらに、既存 slug は update パス（`setattr`）を通るため**タイポが無言で無視**され、
+    運営が「直したのに反映されない」状態に陥っていた。ここで正規化してから
+    insert / update の**両パスで同じ dict を使う**ことで挙動をそろえ、
+    捨てた入力は必ず**警告ログ**に出して気づけるようにする。
+
+    - `dict` でない（None・リスト等）→ まるごと DEFAULT
+    - 未知キー → 無視（警告）
+    - 不足キー・空文字・非 str → DEFAULT の値で補完（警告）
+    """
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning(
+                "[seed] %s の login_lines が dict ではありません（%s）。"
+                "DEFAULT_LOGIN_LINES を使います",
+                idol_id,
+                type(raw).__name__,
+            )
+        return dict(DEFAULT_LOGIN_LINES)
+
+    unknown = [k for k in raw if k not in DEFAULT_LOGIN_LINES]
+    if unknown:
+        logger.warning(
+            "[seed] %s の login_lines に未知のキーがあります: %s（無視します。"
+            "キー名のタイポの可能性があります。有効なキー: %s）",
+            idol_id,
+            ", ".join(sorted(map(str, unknown))),
+            ", ".join(DEFAULT_LOGIN_LINES),
+        )
+
+    normalized: dict[str, str] = {}
+    missing: list[str] = []
+    for field, default in DEFAULT_LOGIN_LINES.items():
+        value = raw.get(field)
+        if isinstance(value, str) and value.strip():
+            normalized[field] = value
+        else:
+            normalized[field] = default
+            missing.append(field)
+    if missing:
+        logger.warning(
+            "[seed] %s の login_lines に欠落・不正な値があります: %s"
+            "（DEFAULT_LOGIN_LINES の文言で補完しました）",
+            idol_id,
+            ", ".join(missing),
+        )
+    return normalized
+
+
+def _normalize_comments(
+    idol_id: str, raw: object, fallback: dict[int, list[str]]
+) -> dict[int, list[str]]:
+    """運営が書いた吹き出しコメントを検証し、安全な形に正規化する。
+
+    【QA_Q-8 m-1 対応】従来の `LIMITED_IDOL.get("comments") or NEUTRAL_COMMENT_TEMPLATES` は、
+    `{1: [], 2: [], 3: []}`（空配列）が **truthy なので `or` を素通り**し、期待セットが空＝
+    コメント0件になっていた（画面は API フォールバックの1文固定に戻る）。
+    **「キーがあるか」ではなく「中身が1文以上あるか」で判定する。**
+
+    【QA_Q-8 m-2 対応】ランク値・型が無検証で、`rank=4`（誰にも引かれない死にデータ）や
+    数値がそのまま DB に入っていた。数値は SQLite では暗黙変換されるが
+    **PostgreSQL では型エラーで起動失敗しうる**（Q-8 C-1）。ここで弾く。
+
+    - ランクは 1〜3 のみ／値は非空の str のみ（外れたものは警告して捨てる）
+    - **どれか1つでも 0 件のランクが残ったら、全体を fallback に落とす**
+      （「ランク2・3 のユーザーだけ 0 件」という静かな劣化を防ぐ）
+    """
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning(
+                "[seed] %s の comments が dict ではありません（%s）。既定の文言を使います",
+                idol_id,
+                type(raw).__name__,
+            )
+        return fallback
+
+    normalized: dict[int, list[str]] = {rank: [] for rank in VALID_RANKS}
+    dropped: list[str] = []
+    for rank, templates in raw.items():
+        if rank not in VALID_RANKS:
+            dropped.append(f"rank={rank!r}（有効なランクは 1〜3）")
+            continue
+        if not isinstance(templates, (list, tuple)):
+            dropped.append(f"rank={rank} の値がリストではありません")
+            continue
+        for template in templates:
+            if isinstance(template, str) and template.strip():
+                normalized[rank].append(template)
+            else:
+                dropped.append(f"rank={rank} の要素 {template!r}（非文字列または空）")
+
+    if dropped:
+        logger.warning(
+            "[seed] %s の comments に不正な入力があります: %s（無視しました）",
+            idol_id,
+            " / ".join(dropped),
+        )
+
+    empty = [rank for rank in VALID_RANKS if not normalized[rank]]
+    if empty:
+        logger.warning(
+            "[seed] %s の comments はランク %s が0件です。既定の文言に切り替えます"
+            "（一部ランクだけ吹き出しが出ない状態を避けるため）",
+            idol_id,
+            ", ".join(map(str, empty)),
+        )
+        return fallback
+    return normalized
+
+
+# ---------------------------------------------------------------- 並行起動への防御
+
+# seed 全体を直列化するためのアドバイザリロックのキー（PostgreSQL のみ）。
+# 任意の 64bit 整数。他所で使わない固定値にする。
+_SEED_LOCK_KEY = 0x72696E61  # "rina"
+
+
+def _acquire_seed_lock(db: Session) -> None:
+    """seed 全体をプロセス間で直列化する。
+
+    【R-4 M-1 対応】`_sync_idol_comments` は「読取→差分判定→insert/delete」なので、
+    複数プロセスが同時に `seed_all()` を走らせると、双方が「不足」と判定して同じ行を
+    insert し重複が残る／`idol_login_lines` は主キー競合で `seed_all` 全体が
+    `IntegrityError` で落ちる、という事故が起こりうる。
+    **Container Apps のローリング更新では新リビジョンが起動してから旧が落ちる**ため、
+    デプロイのたびに一時的に2プロセスが同時起動する。しかも今回は delete を含む処理なので
+    運用任せにはできない。
+
+    - PostgreSQL: `pg_advisory_xact_lock` を取る。**トランザクション終了で自動解放**されるため、
+      末尾で1回だけ commit する `seed_all` の構造とそのまま噛み合う。
+    - SQLite: 単一ライタなので、**差分を読む前に書込ロックを取ってしまう**。
+      値を変えない UPDATE（`SET name = name`）でロックだけ取得する（データには影響しない）。
+    - その他の方言: 何もしない（後段の savepoint 隔離で最低限の安全性は担保する）。
+    """
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _SEED_LOCK_KEY})
+    elif dialect == "sqlite":
+        # 空テーブル（初回起動）では 0 行更新でロックを取れないことがあるが、
+        # その場合も _insert_safely の savepoint 隔離で衝突を吸収できる。
+        db.execute(text("UPDATE idols SET name = name"))
+
+
+def _insert_safely(db: Session, obj: object) -> bool:
+    """他プロセスが同じ行を先に入れていても落ちないように savepoint 隔離で INSERT する。
+
+    【R-4 M-1 対応】衝突（`IntegrityError`）した場合は **その savepoint だけ**ロールバックし、
+    「相手の結果を受け入れる」意味で False を返す。外側のトランザクションは無傷なので、
+    seed_all 全体が落ちることはない。前スプリントの R-1 B-1／QA B2-1 と同じ流儀。
+    """
+    try:
+        with db.begin_nested():
+            db.add(obj)
+            db.flush()
+        return True
+    except IntegrityError:
+        return False
+
+
 # ---------------------------------------------------------------- seed 本体
 
 
 def seed_all(db: Session) -> None:
-    """全seedデータを投入する（**毎起動で通る upsert**・冪等）。"""
+    """全seedデータを投入する（**毎起動で通る upsert**・冪等・並行起動でも落ちない）。"""
+    _acquire_seed_lock(db)
     _seed_idols(db)
     _seed_limited_idol(db)
+    _seed_legacy_limited_idols(db)
     _seed_device_types(db)
     _seed_faq(db)
     db.commit()
@@ -317,20 +500,28 @@ def _sync_idol_comments(
             db.delete(row)  # 期待外（旧文言）または重複行は削除する
 
     for rank, template in expected - kept:
-        db.add(IdolComment(idol_id=idol_id, rank=rank, template=template))
+        # 【R-4 M-1】並行 seed で相手が先に同じ行を入れていても落ちないよう savepoint 隔離
+        _insert_safely(db, IdolComment(idol_id=idol_id, rank=rank, template=template))
 
 
 def _sync_login_lines(db: Session, idol_id: str, lines: dict[str, str]) -> None:
     """指定アイドルのログインボーナス文言を upsert する（冪等）。
 
-    `idol_id` が主キーなので `_seed_device_types` と同じ素直な upsert で足りる。
+    `idol_id` が主キーなので素直な upsert で足りる。渡される `lines` は
+    `_normalize_login_lines` で検証済みの6キーであることを前提とする
+    （呼び出し側で必ず通すこと。無検証の dict をそのまま展開しない＝ QA_Q-8 M-1）。
     """
     existing = db.get(IdolLoginLine, idol_id)
     if existing is None:
-        db.add(IdolLoginLine(idol_id=idol_id, **lines))
-    else:
-        for field, value in lines.items():
-            setattr(existing, field, value)
+        # 【R-4 M-1】並行 seed での主キー競合を savepoint で吸収し、
+        # 負けた側は相手が入れた行を読み直して update に回る。
+        if _insert_safely(db, IdolLoginLine(idol_id=idol_id, **lines)):
+            return
+        existing = db.get(IdolLoginLine, idol_id)
+        if existing is None:
+            return
+    for field, value in lines.items():
+        setattr(existing, field, value)
 
 
 def _seed_limited_idol(db: Session) -> None:
@@ -346,18 +537,21 @@ def _seed_limited_idol(db: Session) -> None:
     文言が未用意の場合は中立9文／DEFAULT_LOGIN_LINES に落ちるので、差し替え時に
     文言を忘れても画面は壊れない（§6.2 原則2）。
     """
-    existing = db.get(Idol, LIMITED_IDOL["id"])
+    slug = LIMITED_IDOL["id"]
+    existing = db.get(Idol, slug)
     if existing is None:
-        db.add(
+        _insert_safely(
+            db,
             Idol(
-                id=LIMITED_IDOL["id"],
+                id=slug,
                 name=LIMITED_IDOL["name"],
                 theme_color=LIMITED_IDOL["theme_color"],
                 catchphrase=LIMITED_IDOL["catchphrase"],
                 is_limited=True,
-            )
+            ),
         )
-    else:
+        existing = db.get(Idol, slug)
+    if existing is not None:
         # 運営がファイルを差し替えた場合に備え、属性を最新化する（is_limited は必ず True）
         existing.name = LIMITED_IDOL["name"]
         existing.theme_color = LIMITED_IDOL["theme_color"]
@@ -365,16 +559,54 @@ def _seed_limited_idol(db: Session) -> None:
         existing.is_limited = True
     db.flush()  # 子テーブル（コメント・文言）の FK 解決のため先に確定させる
 
+    # 【QA_Q-8 M-1・m-1・m-2】運営が書いた文言は必ず検証してから使う。
+    # 壊れていても DEFAULT／中立9文に落ち、**起動は必ず成功する**（D-4 §6.2 原則2）。
     _sync_idol_comments(
         db,
-        LIMITED_IDOL["id"],
-        LIMITED_IDOL.get("comments") or NEUTRAL_COMMENT_TEMPLATES,
+        slug,
+        _normalize_comments(slug, LIMITED_IDOL.get("comments"), NEUTRAL_COMMENT_TEMPLATES),
     )
     _sync_login_lines(
-        db,
-        LIMITED_IDOL["id"],
-        LIMITED_IDOL.get("login_lines") or DEFAULT_LOGIN_LINES,
+        db, slug, _normalize_login_lines(slug, LIMITED_IDOL.get("login_lines"))
     )
+
+
+def _seed_legacy_limited_idols(db: Session) -> None:
+    """**過去 slug の限定推し**にも中立9文と DEFAULT 文言を行き渡らせる（冪等）。
+
+    【QA_Q-8 m-3 対応】文言を投入していたのは `IDOLS_DATA` の6人＋**現行の** `LIMITED_IDOL` だけ
+    だったため、月中差し替え（2026-07-23 の seira → rinaresu 等）で取り残されたユーザーは、
+    吹き出しが API フォールバックの「{nickname}、いつもありがとう！」**1文固定**のままだった。
+    T1 を取った最上位貢献者ほど体験が貧しいという、D-4 §6.1 が直したはずの逆転が
+    過去 slug で再発していた形。
+
+    **既にコメント／文言を持っている過去 slug は一切上書きしない**（不足ぶんを埋めるだけ）。
+    過去 slug の文言は「消す必要はなく、消してもいけない」ため（DESIGN_D-4 §6.3）。
+    """
+    legacy_ids = [
+        idol.id
+        for idol in db.query(Idol).filter(Idol.is_limited.is_(True)).all()
+        if idol.id != LIMITED_IDOL["id"]
+    ]
+    for slug in legacy_ids:
+        has_comment = (
+            db.query(IdolComment).filter(IdolComment.idol_id == slug).first() is not None
+        )
+        if not has_comment:
+            for rank, templates in NEUTRAL_COMMENT_TEMPLATES.items():
+                for template in templates:
+                    _insert_safely(
+                        db, IdolComment(idol_id=slug, rank=rank, template=template)
+                    )
+            logger.info(
+                "[seed] 過去の期間限定推し %s に中立コメント9文を補充しました", slug
+            )
+        if db.get(IdolLoginLine, slug) is None:
+            _insert_safely(db, IdolLoginLine(idol_id=slug, **DEFAULT_LOGIN_LINES))
+            logger.info(
+                "[seed] 過去の期間限定推し %s に既定のログインボーナス文言を補充しました",
+                slug,
+            )
 
 
 def _seed_idols(db: Session) -> None:
@@ -389,18 +621,30 @@ def _seed_idols(db: Session) -> None:
     - ユーザーのランク・pt・特典には一切触らない（変わるのは表示文言だけ）。
     """
     for data in IDOLS_DATA:
-        existing = db.get(Idol, data["id"])
+        slug = data["id"]
+        existing = db.get(Idol, slug)
         if existing is None:
-            db.add(Idol(**data, is_limited=False))
-        else:
+            # 【R-4 M-1】並行 seed での主キー競合を savepoint で吸収する
+            _insert_safely(db, Idol(**data, is_limited=False))
+            existing = db.get(Idol, slug)
+        if existing is not None:
             existing.name = data["name"]
             existing.theme_color = data["theme_color"]
             existing.catchphrase = data["catchphrase"]
             existing.is_limited = False  # 通常名簿の6人は必ず通常枠
         db.flush()  # 子テーブル（コメント・文言）の FK 解決のため先に確定させる
 
-        _sync_idol_comments(db, data["id"], IDOL_COMMENT_TEMPLATES[data["id"]])
-        _sync_login_lines(db, data["id"], IDOL_LOGIN_LINES[data["id"]])
+        # コード側の定数も同じ検証を通す（将来の編集ミスで一部ランクが0件になるのを防ぐ）
+        _sync_idol_comments(
+            db,
+            slug,
+            _normalize_comments(
+                slug, IDOL_COMMENT_TEMPLATES.get(slug), NEUTRAL_COMMENT_TEMPLATES
+            ),
+        )
+        _sync_login_lines(
+            db, slug, _normalize_login_lines(slug, IDOL_LOGIN_LINES.get(slug))
+        )
 
 
 # デバイス種別マスタ（21種）の真実の源。
