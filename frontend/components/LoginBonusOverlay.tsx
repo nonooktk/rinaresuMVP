@@ -32,8 +32,15 @@ import type { LoginBonusResult, User } from "@/lib/types";
 const OPEN_ANIMATION_MS = 1200;
 /** prefers-reduced-motion 時の待ち時間（D-3 §4.5）。動かないのに待たせない。 */
 const REDUCED_ANIMATION_MS = 300;
-/** claim の最大待ち時間。超えたらトースト＋クローズへ（D-3 §4.4）。 */
-const CLAIM_TIMEOUT_MS = 3000;
+/**
+ * 封筒タップから結果確定までの**総予算**（D-3 §4.4「3.0 秒を超える／失敗 → 閉じます」）。
+ *
+ * 【QA_Q-6 N-2 対応】初回 claim と再送で 3 秒タイマーを積み増すと、拘束時間が
+ * 1.2 + 3.0 + 3.0 = 7.2 秒まで伸びる。毎日出る画面で 7 秒の操作不能は許容できないため、
+ * **タップ時点から数える単一のデッドライン**にして、初回・再送ともこの予算の中で動かす。
+ * 予算内に残り時間があるときだけ再送する（初回が即失敗した場合＝M-1 の主経路では十分に残る）。
+ */
+const CLAIM_BUDGET_MS = 3000;
 
 /** ハート1個ぶんのパス（24×24 の viewBox 基準）。絵文字♡は環境ごとの字形差があるため SVG にする。 */
 const HEART_PATH =
@@ -265,12 +272,30 @@ interface LoginBonusOverlayProps {
   /** 推しのテーマカラー（封筒のふた・吹き出しの枠・ボタンに使う。文字色には使わない） */
   themeColor?: string;
   /**
-   * オーバーレイを閉じたとき。
-   * claim 済みなら結果、claim 前の離脱（Esc）なら null を渡す。
+   * claim を**実際に発火した瞬間**に呼ばれる（QA_Q-6 N-1）。
+   * 呼び出し側はここで「結果を確認できていない claim がある」ことを記録する。
+   * オーバーレイを開いただけで記録すると、他ルート（`/history` の検収など）で
+   * 告知済みの特典まで差分で拾ってしまい二重告知になる。
    */
-  onFinish: (result: LoginBonusResult | null) => void;
-  /** claim の失敗・タイムアウト時（呼び出し側でトースト＋クローズする） */
-  onFail: () => void;
+  onClaimStart: () => void;
+  /**
+   * オーバーレイを閉じたとき。
+   * - `result` … claim 済みなら結果、claim 前の離脱（Esc）なら null
+   * - `recovered` … タイムアウト後の再送で結果を復元した場合のみ true。
+   *   呼び出し側はこれを見て「保有状況の差分による救済」を使ってよいかを判断する
+   *   （通常系や E-1 で差分を使うと二重告知になる。D-3 §5.2）
+   */
+  onFinish: (
+    result: LoginBonusResult | null,
+    recovered: boolean
+  ) => void | Promise<void>;
+  /**
+   * claim の結果を確認できないまま閉じるとき。
+   * - `silent=false` … 予算切れ・通信不能（呼び出し側でトースト＋クローズ）
+   * - `silent=true`  … **ユーザー自身が待機中に離脱した**（トーストは出さない。QA_Q-6 N-2）
+   * いずれも「claim は投げたが結果不明」なので、呼び出し側は再取得と持ち越しを行う。
+   */
+  onFail: (silent?: boolean) => void | Promise<void>;
 }
 
 /** prefers-reduced-motion の判定（SSR・非対応環境では false）。 */
@@ -286,6 +311,7 @@ export default function LoginBonusOverlay({
   claimKey,
   idolName,
   themeColor,
+  onClaimStart,
   onFinish,
   onFail,
 }: LoginBonusOverlayProps) {
@@ -305,6 +331,8 @@ export default function LoginBonusOverlay({
   const claimedRef = useRef(false);
   // onFinish の二重呼び出しガード
   const finishedRef = useRef(false);
+  // 通信待ち中にユーザーが自分で離脱したか（QA_Q-6 N-2）。以降の setState を止める
+  const abandonedRef = useRef(false);
   // アンマウント後の setState を避けるための生存フラグ
   const aliveRef = useRef(true);
   const timersRef = useRef<number[]>([]);
@@ -343,13 +371,27 @@ export default function LoginBonusOverlay({
   }, [step]);
 
   const finish = useCallback(
-    (value: LoginBonusResult | null) => {
-      if (finishedRef.current) return;
+    (value: LoginBonusResult | null, wasRecovered = false) => {
+      if (finishedRef.current || abandonedRef.current) return;
       finishedRef.current = true;
-      onFinish(value);
+      void onFinish(value, wasRecovered);
     },
     [onFinish]
   );
+
+  /**
+   * 通信待ち中にユーザー自身が離脱する（QA_Q-6 N-2）。
+   *
+   * claim は投げてあるので結果は不明。呼び出し側で再取得＋持ち越しを行うため
+   * `onFail(silent=true)` を使う（ユーザーが自分で閉じた以上、
+   * 「うまく受け取れなかった」と告げるのは不適切なのでトーストは出さない）。
+   */
+  const abandon = useCallback(() => {
+    if (finishedRef.current || abandonedRef.current) return;
+    abandonedRef.current = true;
+    setWaiting(false);
+    void onFail(true);
+  }, [onFail]);
 
   /** 指定ミリ秒待つ（タイマーはアンマウント時にまとめて解除する）。 */
   const wait = useCallback(
@@ -381,12 +423,25 @@ export default function LoginBonusOverlay({
    * 成功していることがある。その状態で「受け取れなかった」と閉じてしまうと、pt も
    * 特典解放の告知も永久に伝えられない。claim は**冪等**（`UNIQUE(user_id, bonus_date)`）
    * なので、失敗時は **1回だけ再送**して結果を復元する。
+   *
+   * 【QA_Q-6 N-2 対応】タイマーは積み増さず、タップ時点から `CLAIM_BUDGET_MS` の
+   * **単一デッドライン**で管理する（拘束時間が 7.2 秒に伸びるのを防ぐ）。
+   * 再送は予算に残りがあるときだけ行う。
    */
   const openEnvelope = useCallback(async () => {
     // 【二重タップ・連打ガード（同一マウント内）】ここを通れるのは一度きり
     if (claimedRef.current) return;
     claimedRef.current = true;
     setStep("opening");
+
+    // タップ時点から数える総予算。残り時間はこの1本から計算する。
+    const deadline = Date.now() + CLAIM_BUDGET_MS;
+    const remaining = () => Math.max(deadline - Date.now(), 0);
+
+    // 【QA_Q-6 N-1】「結果を確認できていない claim がある」ことを、**実際に投げるこの瞬間**に
+    // 記録させる。オーバーレイを開いた時点で記録すると、タップせず離れた場合にも持ち越しが
+    // 残り、他ルートで告知済みの特典まで差分で拾ってしまう。
+    onClaimStart();
 
     // 演出は API の応答を待たずに即開始する（通信が遅い日に「タップしたのに無反応」に
     // ならないため）。ステップ3へ進むのは「演出完了」と「API 完了」の両方が揃ってから。
@@ -408,23 +463,21 @@ export default function LoginBonusOverlay({
 
     // 開封演出の最短時間。pt 値によらず常に同じ長さ（D-3 §7-1）
     await wait(reduced ? REDUCED_ANIMATION_MS : OPEN_ANIMATION_MS);
-    if (!aliveRef.current) return;
+    if (!aliveRef.current || abandonedRef.current) return;
 
     try {
       // 【QA_Q-6 m-1 対応】API が演出より遅いときは、ハートの余韻をループさせたまま待つ
       // （D-3 §4.4。スピナーは出さない）。既に応答済みならループへ入れずそのまま進む。
+      // 待機中は Esc・タップでいつでも離脱できる（N-2）。
       if (!settled) setWaiting(true);
-      const claimed = await Promise.race([
-        claimPromise,
-        rejectAfter(CLAIM_TIMEOUT_MS),
-      ]);
-      if (!aliveRef.current) return;
+      const claimed = await Promise.race([claimPromise, rejectAfter(remaining())]);
+      if (!aliveRef.current || abandonedRef.current) return;
       setWaiting(false);
       setResult(claimed);
       setStep("result");
       return;
     } catch {
-      if (!aliveRef.current) return;
+      if (!aliveRef.current || abandonedRef.current) return;
     }
 
     // ---- ここから復元（M-1） ----
@@ -433,52 +486,70 @@ export default function LoginBonusOverlay({
     // 余韻ループは出したまま（ユーザーから見れば「まだ開封中」）。
     // 【R-3 M-1】この再送は resendClaim() が claimKey 単位で1リクエストに固定する
     // ＝「意図した再送」であり、事故による多重発火とは構造的に区別される。
-    try {
-      const restored = await Promise.race([
-        resendClaim(claimKey),
-        rejectAfter(CLAIM_TIMEOUT_MS),
-      ]);
-      if (!aliveRef.current) return;
-      if (restored.points > 0) {
-        // その日ぶんは実際に付与されていた → 通常どおり結果画面へ進める。
-        // `granted` は false（付与したのは1回目）だが、体験としては「受け取れた」が正しい。
-        setWaiting(false);
-        setRecovered(true);
-        setResult(restored);
-        setStep("result");
-        return;
+    // 【N-2】予算に残りが無ければ再送しない（初回がタイムアウトで使い切った場合）。
+    //   その場合でも呼び出し側の再取得＋差分＋持ち越しで告知は失われない。
+    if (remaining() > 0) {
+      try {
+        const restored = await Promise.race([
+          resendClaim(claimKey),
+          rejectAfter(remaining()),
+        ]);
+        if (!aliveRef.current || abandonedRef.current) return;
+        if (restored.points > 0) {
+          // その日ぶんは実際に付与されていた → 通常どおり結果画面へ進める。
+          // `granted` は false（付与したのは1回目）だが、体験としては「受け取れた」が正しい。
+          setWaiting(false);
+          setRecovered(true);
+          setResult(restored);
+          setStep("result");
+          return;
+        }
+      } catch {
+        if (!aliveRef.current || abandonedRef.current) return;
       }
-    } catch {
-      if (!aliveRef.current) return;
     }
 
     // 再送でも復元できなかった＝本当に通信できていない。
     // ホームは壊さず、トースト＋クローズで復帰させる（D-3 §4.4・LB-10 ④）。
     setWaiting(false);
-    onFail();
-  }, [claimKey, reduced, onFail, wait, rejectAfter]);
+    onFail(false);
+  }, [claimKey, reduced, onClaimStart, onFail, wait, rejectAfter]);
 
-  /** 画面タップ・進行ボタンの共通処理。演出中（opening）は何も受け付けない。 */
+  /**
+   * 画面タップ・進行ボタンの共通処理。
+   * 開封演出中（1.2秒）は受け付けない（連打で claim 二重発火・ステップ飛ばしの温床になるため）。
+   * ただし**通信待ち（waiting）に入ったらいつでも離脱できる**（QA_Q-6 N-2）。
+   */
   const advance = useCallback(() => {
     if (step === "greet") {
       setStep("envelope");
     } else if (step === "envelope") {
       void openEnvelope();
+    } else if (step === "opening") {
+      if (waiting) abandon();
     } else if (step === "result") {
-      finish(result);
+      finish(result, recovered);
     }
-  }, [step, openEnvelope, finish, result]);
+  }, [step, waiting, openEnvelope, abandon, finish, result, recovered]);
 
   // Esc で閉じる／Tab をオーバーレイ内で循環させる（フォーカストラップ）。
   // ハンドラは ref 経由で最新化し、リスナー自体は付け外ししない。
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {});
   keyHandlerRef.current = (e: KeyboardEvent) => {
-    if (step === "opening") return; // 演出中は操作不可
+    if (step === "opening") {
+      // 開封演出中（1.2秒）は操作不可。ただし**通信待ちに入ったら Esc で離脱できる**
+      // （QA_Q-6 N-2。全画面オーバーレイに閉じ込めない）。
+      if (e.key === "Escape" && waiting) {
+        e.preventDefault();
+        abandon();
+      }
+      return;
+    }
 
     if (e.key === "Escape") {
       e.preventDefault();
       // claim 済み（result あり）なら通常クローズと同じ扱い。未 claim なら翌アクセスで再表示。
-      finish(result);
+      finish(result, recovered);
       return;
     }
     if (e.key !== "Tab") return;

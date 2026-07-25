@@ -127,3 +127,24 @@ export function clearPendingLoginBonus(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(LOGIN_BONUS_PENDING_KEY);
 }
+
+/**
+ * 持ち越しの**基準だけ**を最新値へ更新する（持ち越し自体は消さない）。
+ *
+ * 【QA_Q-6 N-1 対応】持ち越しは「ログインボーナスの claim が入ったかどうか」を測るための
+ * 基準線。検収（`/history`）など**別ルートで特典が解放され、そこで既に告知した**場合に
+ * 基準を古いままにしておくと、次のホーム表示でその特典まで差分で拾って**二重告知**になる。
+ * 別ルートで告知を出した側がこの関数で基準を進めることで、
+ * 「ログインボーナス由来の変化」だけが差分に残るようにする。
+ *
+ * 該当ユーザーの持ち越しが無ければ何もしない（新規作成はしない）。
+ */
+export function rebasePendingLoginBonus(
+  userId: string,
+  monthlyPoints: number,
+  rewards: RewardsStatus | null
+): void {
+  const pending = getPendingLoginBonus();
+  if (!pending || pending.userId !== userId) return;
+  storePendingLoginBonus({ userId, monthlyPoints, rewards });
+}

@@ -57,9 +57,12 @@ export default function HomePage() {
   const [loginBonusKey, setLoginBonusKey] = useState<string>("");
   // 1回のマウントで最大1度しか出さない（claim 後の再取得で再表示されないように）
   const loginBonusShownRef = useRef(false);
-  // オーバーレイを開く直前の特典保有状況。claim のレスポンスを取り逃した場合に、
-  // 再取得後の保有状況との差分から「新たに解放された特典」を復元する（QA_Q-6 M-1）。
-  const rewardsSnapshotRef = useRef<RewardsStatus | null>(null);
+  // オーバーレイを開く直前の月間pt・特典保有状況。claim のレスポンスを取り逃した場合に、
+  // 再取得後の値との差分から「新たに解放された特典」を復元する（QA_Q-6 M-1）。
+  const bonusSnapshotRef = useRef<{
+    monthlyPoints: number;
+    rewards: RewardsStatus | null;
+  } | null>(null);
   // ログインボーナスで閾値を跨いだときの達成演出（history と同じ RewardDialog を共用）
   const [grantedRewards, setGrantedRewards] = useState<RewardGranted[] | null>(
     null
@@ -105,31 +108,40 @@ export default function HomePage() {
       const fb2 = FALLBACK_IDOLS.find((i) => i.id === currentIdolId) ?? null;
       if (fb2) setIdol(fb2);
 
+      // 当日ぶんが未受領ならログインボーナスのオーバーレイを出す（1マウント1回まで）。
+      // 判定は必ず**再取得したサーバー値**で行う（保存済みユーザーは古い可能性がある）。
+      const willOpenOverlay =
+        fresh.login_bonus_available === true && !loginBonusShownRef.current;
+
       // 【QA_Q-6 M-1】前回「結果を確認できなかった claim」の持ち越しがあれば、ここで回収する。
       // 送信が遅延して失敗表示のあとにサーバー側で付与が確定した場合、この経路でしか
       // 達成告知を拾えない（rewards_granted[] は GET /api/users/{id} には含まれないため）。
       const pending = getPendingLoginBonus();
-      if (pending && pending.userId === fresh.id) {
-        announceRewards(diffGrantedRewards(pending.rewards, fresh.rewards));
+      if (pending) {
+        if (pending.userId !== fresh.id) {
+          // 別アカウントのスナップショットは誤告知の元。無条件に破棄する
+          clearPendingLoginBonus();
+        } else if (willOpenOverlay) {
+          // 【QA_Q-6 N-1 / D-3 §5.1】これからオーバーレイを出す場面では告知しない
+          // （ログインボーナスの演出と特典達成を同居させない）。持ち越しはそのまま残し、
+          // 今回の claim の結果で決着させる。
+        } else {
+          announceRewards(diffGrantedRewards(pending.rewards, fresh.rewards));
+          // 持ち越しは「次の1回のホーム表示まで」と決めている
+          clearPendingLoginBonus();
+        }
       }
-      // 照合できない持ち越し（別アカウント等）も含めて、ここで必ず破棄する
-      // （持ち越しは「次の1回のホーム表示まで」と決めている）。
-      if (pending) clearPendingLoginBonus();
 
-      // 当日ぶんが未受領ならログインボーナスのオーバーレイを出す（1マウント1回まで）。
-      // 判定は必ず**再取得したサーバー値**で行う（保存済みユーザーは古い可能性がある）。
-      if (fresh.login_bonus_available === true && !loginBonusShownRef.current) {
+      if (willOpenOverlay) {
         loginBonusShownRef.current = true;
-        // 達成演出を復元するための基準（QA_Q-6 M-1）
-        rewardsSnapshotRef.current = fresh.rewards ?? null;
-        // claim の発火回数を固定するためのキー（R-3 M-1）
-        setLoginBonusKey(`${fresh.id}-${Date.now()}`);
-        // 「これから claim する」ことを永続化しておく。結果を確認できたら破棄する。
-        storePendingLoginBonus({
-          userId: fresh.id,
+        // 達成演出を復元するための基準（QA_Q-6 M-1）。
+        // 持ち越しの保存は「実際に claim を投げた瞬間」に行う（N-1）。
+        bonusSnapshotRef.current = {
           monthlyPoints: fresh.monthly_points ?? 0,
           rewards: fresh.rewards ?? null,
-        });
+        };
+        // claim の発火回数を固定するためのキー（R-3 M-1）
+        setLoginBonusKey(`${fresh.id}-${Date.now()}`);
         setLoginBonusOpen(true);
       }
     } catch {
@@ -215,7 +227,8 @@ export default function HomePage() {
   const refreshAndAnnounce = useCallback(
     async (
       fromResponse: RewardGranted[],
-      outcomeKnown: boolean
+      outcomeKnown: boolean,
+      allowDiffFallback: boolean
     ): Promise<User | null> => {
       let fresh: User | null = null;
       const stored = getStoredUser();
@@ -229,20 +242,32 @@ export default function HomePage() {
         }
       }
 
+      // 【QA_Q-6 N-1】差分フォールバックは「自分が claim を投げたのに結果を確認できなかった」
+      // 場合の**救済に限定**する。通常系（閾値未跨ぎ）や E-1（別経路で受領済み）で使うと、
+      // 他ルートで告知済みの特典まで拾って二重告知になる（D-3 §5.2）。
       const granted =
         fromResponse.length > 0
           ? fromResponse
-          : diffGrantedRewards(rewardsSnapshotRef.current, fresh?.rewards);
+          : allowDiffFallback
+            ? diffGrantedRewards(bonusSnapshotRef.current?.rewards, fresh?.rewards)
+            : [];
       // 同じ特典を二重に告知しないよう、基準を最新の保有状況へ進めておく
-      if (fresh?.rewards) rewardsSnapshotRef.current = fresh.rewards;
+      if (fresh) {
+        bonusSnapshotRef.current = {
+          monthlyPoints: fresh.monthly_points ?? 0,
+          rewards: fresh.rewards ?? null,
+        };
+      }
 
       // 持ち越しの後始末:
       //  - 結果が確定している（outcomeKnown）→ 破棄する
-      //  - 確定していない（失敗経路）→ **いま観測した値へ基準を更新して持ち越す**。
+      //  - 確定していない（失敗・離脱）→ **いま観測した値へ基準を更新して持ち越す**。
       //    送信が遅延してこの後にサーバー側で付与が確定しても、次のホーム表示で拾える。
-      if (outcomeKnown || !fresh) {
+      //  【QA_Q-6 N-3】再取得にも失敗した場合（fresh == null）は、既存の持ち越しを
+      //    **消さずに残す**。通信が不安定なときこそ持ち越しが要るため。
+      if (outcomeKnown) {
         clearPendingLoginBonus();
-      } else {
+      } else if (fresh) {
         storePendingLoginBonus({
           userId: fresh.id,
           monthlyPoints: fresh.monthly_points ?? 0,
@@ -259,7 +284,7 @@ export default function HomePage() {
   // ログインボーナスの結果表示を閉じたとき（LB-10 ②③）。
   // claim 済みなら結果が渡る。Esc 等で claim 前に離脱した場合は null（翌アクセスで再表示）。
   const handleLoginBonusFinish = useCallback(
-    async (result: LoginBonusResult | null) => {
+    async (result: LoginBonusResult | null, recovered: boolean) => {
       setLoginBonusOpen(false);
       if (!result) {
         // claim 前の離脱（Esc）。まだ何も投げていないので持ち越しは不要。
@@ -267,7 +292,9 @@ export default function HomePage() {
         return;
       }
       // 結果を確認できている＝告知は完了。持ち越しは破棄する。
-      await refreshAndAnnounce(result.rewards_granted ?? [], true);
+      // 【QA_Q-6 N-1】差分の救済を使ってよいのは「再送で復元した」場合だけ。
+      // 通常系（閾値未跨ぎ）や E-1（別経路で受領済み）で使うと二重告知になる（D-3 §5.2）。
+      await refreshAndAnnounce(result.rewards_granted ?? [], true, recovered);
     },
     [refreshAndAnnounce]
   );
@@ -281,16 +308,37 @@ export default function HomePage() {
   //   ①月間ptが増えていたら「受け取れなかった」と**断定しない**（誤情報を出さない）
   //   ②保有状況の差分から特典解放を検知したら達成演出へ接続する
   // ことで、「UI は失敗・サーバーは成功」で告知が消える状態を残さない。
-  const handleLoginBonusFail = useCallback(async () => {
-    setLoginBonusOpen(false);
-    const before = user?.monthly_points ?? 0;
-    // outcomeKnown=false: 結果が確定していないため、持ち越しを残して次のホーム表示でも拾う
-    const fresh = await refreshAndAnnounce([], false);
-    const actuallyGranted = fresh != null && (fresh.monthly_points ?? 0) > before;
-    if (!actuallyGranted) {
-      show("うまく受け取れなかったみたい…また来てね");
-    }
-  }, [refreshAndAnnounce, show, user]);
+  //
+  // `silent=true` は「通信待ち中にユーザー自身が離脱した」場合（QA_Q-6 N-2）。
+  // 自分で閉じたのに「受け取れなかった」と言われるのは不適切なのでトーストは出さない。
+  const handleLoginBonusFail = useCallback(
+    async (silent = false) => {
+      setLoginBonusOpen(false);
+      const before = user?.monthly_points ?? 0;
+      // outcomeKnown=false: 結果が確定していないため、持ち越しを残して次のホーム表示でも拾う。
+      // 差分の救済はこの経路でのみ許す（＝自分が claim を投げたが結果不明）。
+      const fresh = await refreshAndAnnounce([], false, true);
+      const actuallyGranted =
+        fresh != null && (fresh.monthly_points ?? 0) > before;
+      if (!silent && !actuallyGranted) {
+        show("うまく受け取れなかったみたい…また来てね");
+      }
+    },
+    [refreshAndAnnounce, show, user]
+  );
+
+  // 【QA_Q-6 N-1】claim を**実際に投げた瞬間**に「結果を確認できていない claim がある」ことを
+  // 記録する。オーバーレイを開いた時点で記録すると、タップせず離れた場合にも持ち越しが残り、
+  // `/history` の検収など他ルートで告知済みの特典まで差分で拾ってしまう。
+  const handleLoginBonusClaimStart = useCallback(() => {
+    const snapshot = bonusSnapshotRef.current;
+    if (!user || !snapshot) return;
+    storePendingLoginBonus({
+      userId: user.id,
+      monthlyPoints: snapshot.monthlyPoints,
+      rewards: snapshot.rewards,
+    });
+  }, [user]);
 
   const theme = idol?.theme_color ?? "#ff87b2";
   // 特殊ビジュアル（T2）獲得済みなら、限定推しを含めどの推しでも special 表示・切替可。
@@ -460,6 +508,7 @@ export default function HomePage() {
           claimKey={loginBonusKey}
           idolName={idol?.name}
           themeColor={theme}
+          onClaimStart={handleLoginBonusClaimStart}
           onFinish={handleLoginBonusFinish}
           onFail={handleLoginBonusFail}
         />

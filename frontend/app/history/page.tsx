@@ -12,7 +12,11 @@ import GameButton from "@/components/GameButton";
 import RewardDialog, { rewardsToastMessage } from "@/components/RewardDialog";
 import { useToast } from "@/components/Toast";
 import { api, mediaUrl } from "@/lib/api";
-import { getStoredUser, storeUser } from "@/lib/session";
+import {
+  getStoredUser,
+  rebasePendingLoginBonus,
+  storeUser,
+} from "@/lib/session";
 import type { Device, RewardGranted, Shipment } from "@/lib/types";
 
 // 達成演出（トースト文面・達成ダイアログ）は components/RewardDialog.tsx へ切り出し、
@@ -114,6 +118,14 @@ export default function HistoryPage() {
         try {
           const latest = await api.getUser(stored.id);
           storeUser(latest);
+          // 【QA_Q-6 N-1】検収で解放された特典は、この画面で告知する。
+          // ログインボーナスの「結果を確認できなかった claim」の持ち越しが残っていると、
+          // 次のホーム表示でこの特典まで差分で拾って二重告知になるため、基準を進めておく。
+          rebasePendingLoginBonus(
+            latest.id,
+            latest.monthly_points ?? 0,
+            latest.rewards ?? null
+          );
           // ランクが上がった場合はお祝いトースト
           if (latest.rank > stored.rank) {
             show(
