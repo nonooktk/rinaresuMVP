@@ -187,6 +187,13 @@ body {
   animation: heartFloat 0.85s ease-out forwards;
 }
 
+/* 通信が開封演出（1.2秒）より遅いときの「ハートの余韻」（DESIGN_D-3 §4.4・QA_Q-6 m-1）。
+   同じ heartFloat をゆっくり無限ループさせて、待っている間も画面が無反応にならないようにする。
+   スピナーは出さない（世界観を切らないため）。 */
+.animate-heart-float-loop {
+  animation: heartFloat 1.8s ease-out infinite;
+}
+
 /* 動きに敏感なユーザー向け: アニメーションを無効化し静的な表現にフォールバック
    （DESIGN_D-2 §2/§6・DESIGN_D-3 §4.5）。
    ※ ログインボーナスの「演出の待ち時間 1200ms → 300ms」は CSS では消せないため、
@@ -201,8 +208,10 @@ body {
     animation: none;
     transform: scaleY(-1);
   }
-  /* ハート: 舞い上がらせず、封筒の上に扇状（--dx）で静止表示する */
-  .animate-heart-float {
+  /* ハート: 舞い上がらせず、封筒の上に扇状（--dx）で静止表示する。
+     余韻ループ（通信待ち）も同様に動かさず静止させる（D-3 §4.5）。 */
+  .animate-heart-float,
+  .animate-heart-float-loop {
     animation: none;
     opacity: 0.9;
     transform: translate(var(--dx, 0px), -70px) rotate(var(--rot, 0deg));

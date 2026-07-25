@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from app.models import LoginBonus, User, UserReward
 from app.services.login_bonus import (
     BONUS_POINT_CHOICES,
+    awarded_points_of_day,
     claim,
     current_date_jst,
     current_keys_jst,
@@ -86,7 +87,9 @@ def test_claim_twice_same_day_grants_only_once(db, make_user):
 
     second = claim(user, db, period, "2026-07-25")
     assert second["granted"] is False
-    assert second["points"] == 0
+    # 【M-1 対応】points は「その日に付与された pt」を返す（0 ではない）。
+    # 付与そのものは1回きりで、月間ptは増えない。
+    assert second["points"] == first["points"]
     # 2回目でも月間ptは1回分のまま
     assert second["monthly_points"] == first["points"]
 
@@ -212,7 +215,8 @@ def test_claim_api_first_and_second_call(client, db, make_user):
     assert second.status_code == 200
     body2 = second.json()
     assert body2["granted"] is False
-    assert body2["points"] == 0
+    # 【M-1 対応】その日に付与された pt を返す（再送での復元に使う）。月間ptは増えない。
+    assert body2["points"] == body1["points"]
     assert body2["monthly_points"] == body1["points"]
 
 
@@ -249,7 +253,18 @@ def test_login_bonus_available_is_scoped_to_owner(client, make_user):
 
 
 def test_concurrent_claim_grants_only_once(client, db, make_user):
-    """③ 実スレッド10並行 claim → 成功（granted=true）は1件のみ・履歴も1行。"""
+    """③ 実スレッド10並行 claim → 成功（granted=true）は1件のみ・履歴も1行。
+
+    【R-3 M-2・PostgreSQL でも成立する根拠】本テストは SQLite でのみ実行している
+    （ローカル/CI に PostgreSQL 環境が無いため。同条件は前スプリントの QA_Q-2 も同様）。
+    多重付与を止めているのは方言依存の仕組みではなく、①`UNIQUE(user_id, bonus_date)` の
+    一意制約 ②`db.begin_nested()` の SAVEPOINT ③`SET monthly_points = monthly_points + :v`
+    の単一 UPDATE の3点で、いずれも標準 SQL の機能。PostgreSQL では同一キーへの並行 INSERT が
+    先行トランザクションの commit までブロックされたうえで unique_violation となり、SAVEPOINT が
+    あればアボートしたトランザクションを復帰できる（PostgreSQL では SAVEPOINT が必須で、
+    実装はそれを満たしている）。pt 加算も行ロックで直列化される。よって本テストが
+    SQLite で green であれば PostgreSQL でも同じ結論になる。後任は同じ検証を繰り返さなくてよい。
+    """
     N = 10
     user = make_user()
     hdr = client.auth_headers(user.id)
@@ -276,6 +291,113 @@ def test_concurrent_claim_grants_only_once(client, db, make_user):
     db.refresh(u)
     assert u.monthly_points == awarded, f"monthly_points={u.monthly_points}（期待{awarded}）＝多重付与"
     assert u.points == 0, "累計ptが加算されている（月間ptのみのはず）"
+
+
+# ------------------------------------------------- QA_Q-6 M-1（再送での復元）
+
+
+def test_resend_returns_awarded_points_of_the_day(db, make_user):
+    """M-1: 本日受領済みの応答でも「その日に付与された pt」が返る（再送で復元できる）。
+
+    タイムアウトしたクライアントが再送したとき、0 が返ると「いくら入ったのか」を
+    復元できず、結果画面も特典解放の告知も出せなくなる（＝M-1 の本体）。
+    """
+    user = make_user()
+    period = current_period_jst()
+
+    first = claim(user, db, period, "2026-07-25")
+    assert first["granted"] is True
+    awarded = first["points"]
+    assert awarded in (1, 5, 10)
+
+    resent = claim(user, db, period, "2026-07-25")
+    assert resent["granted"] is False, "再送で二重付与されている"
+    assert resent["points"] == awarded, "再送で当日の付与pt が復元できない（M-1 再発）"
+    assert resent["monthly_points"] == first["monthly_points"]
+
+    db.refresh(user)
+    assert user.monthly_points == awarded
+    assert db.query(LoginBonus).filter(LoginBonus.user_id == user.id).count() == 1
+
+
+def test_claim_is_idempotent_on_repeated_resend(client, db, make_user):
+    """M-1: API を何度再送しても付与は1回きりで、毎回同じ付与pt が返る（冪等性の保証）。"""
+    user = make_user()
+    hdr = client.auth_headers(user.id)
+
+    first = client.post("/api/login-bonus/claim", headers=hdr).json()
+    assert first["granted"] is True
+    awarded = first["points"]
+
+    for i in range(5):
+        body = client.post("/api/login-bonus/claim", headers=hdr).json()
+        assert body["granted"] is False, f"{i + 2}回目で二重付与されている"
+        assert body["points"] == awarded, f"{i + 2}回目の points が {body['points']}（期待{awarded}）"
+        assert body["monthly_points"] == awarded
+
+    db.rollback()
+    assert db.query(LoginBonus).filter(LoginBonus.user_id == user.id).count() == 1
+    u = db.get(User, user.id)
+    db.refresh(u)
+    assert u.monthly_points == awarded
+    assert u.points == 0, "累計ptが動いている"
+
+
+def test_resend_after_timeout_can_recover_reward_unlock(client, db, make_user):
+    """M-1 再現ケース: 1回目がタイムアウト扱いでも、再送＋rewards 差分で特典解放を復元できる。
+
+    再送レスポンス自体に `rewards_granted` は載らない（付与は1回目で済んでいるため）。
+    フロントは「オーバーレイを開く前の rewards」と「claim 後に再取得した rewards」の
+    差分で解放を検知する。ここではその材料（付与pt・月間pt・rewards の遷移）が
+    サーバーから確実に取れることを保証する。
+    """
+    period = current_period_jst()
+    user = make_user(monthly_points=99, monthly_period=period)
+    hdr = client.auth_headers(user.id)
+
+    # オーバーレイを開く直前のスナップショット（フロントが保持する値に相当）
+    before = client.get(f"/api/users/{user.id}", headers=hdr).json()
+    assert before["rewards"]["limited_idol_active"] is False
+    assert before["login_bonus_available"] is True
+
+    # 1回目（クライアントから見ればタイムアウトしてレスポンスを取り逃した想定）
+    lost = client.post("/api/login-bonus/claim", headers=hdr).json()
+    assert lost["granted"] is True
+    awarded = lost["points"]
+    assert [g["tier"] for g in lost["rewards_granted"]] == ["T1"]
+
+    # 再送（フロントが復元のために1回だけ投げ直す）
+    resent = client.post("/api/login-bonus/claim", headers=hdr).json()
+    assert resent["granted"] is False
+    assert resent["points"] == awarded, "再送で付与pt が復元できない"
+    assert resent["monthly_points"] == 99 + awarded
+    assert resent["rewards_granted"] == [], "再送で特典が二重付与されている"
+
+    # 差分検知の材料: rewards が false → true へ遷移していること
+    after = client.get(f"/api/users/{user.id}", headers=hdr).json()
+    assert after["rewards"]["limited_idol_active"] is True
+    assert after["monthly_points"] == 99 + awarded
+    assert after["login_bonus_available"] is False
+
+    # 特典レコードは1件だけ
+    db.rollback()
+    assert (
+        db.query(UserReward)
+        .filter(UserReward.user_id == user.id, UserReward.threshold == 100)
+        .count()
+        == 1
+    )
+
+
+def test_awarded_points_of_day_helper(db, make_user):
+    """`awarded_points_of_day`: 未受領は 0、受領後はその日の付与額、別日は 0。"""
+    user = make_user()
+    period = current_period_jst()
+
+    assert awarded_points_of_day(db, user.id, "2026-07-25") == 0
+    result = claim(user, db, period, "2026-07-25")
+    assert awarded_points_of_day(db, user.id, "2026-07-25") == result["points"]
+    assert awarded_points_of_day(db, user.id, "2026-07-26") == 0
 
 
 def test_is_available_helper(db, make_user):

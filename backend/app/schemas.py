@@ -223,9 +223,12 @@ class LoginBonusClaimOut(BaseModel):
     リクエストボディは無い（pt も user_id も受け取らない＝抽選はサーバー側のみ・
     対象は通行証から解決した本人のみ）。本日受領済みでもエラーにはせず
     200＋`granted=false` を返す。
+
+    **この API は冪等**。応答が取れなかったクライアントは安全に再送でき、再送時は
+    `granted=false` ＋ `points`＝その日に実際に付与された pt が返る（QA_Q-6 M-1 対応）。
     """
-    granted: bool                                    # 今回付与できたか（false=本日受領済み）
-    points: int = 0                                  # 今回付与した pt（granted=false なら 0）
+    granted: bool                                    # **今回の呼び出しで**新規付与したか（false=本日受領済み）
+    points: int = 0                                  # **その日に付与された pt**（granted=false でも実額。未受領なら 0）
     monthly_points: int = 0                          # 付与後の当月月間pt
     next_reward: NextReward | None = None            # 次に狙う特典（積み上げ表示用）
     rewards_granted: list[RewardGranted] = []        # この付与で新規獲得した特典（閾値跨ぎ）

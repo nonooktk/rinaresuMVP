@@ -86,8 +86,23 @@ def is_available(db: Session, user_id: int, bonus_date: str) -> bool:
     return exists is None
 
 
+def awarded_points_of_day(db: Session, user_id: int, bonus_date: str) -> int:
+    """その日（JST）に実際に付与された pt を返す（未受領なら 0）。
+
+    【QA_Q-6 M-1 対応】claim がタイムアウトしたクライアントが**再送**したときに、
+    「今日はいくら入ったのか」をレスポンスから復元できるようにするためのヘルパー。
+    履歴テーブルが唯一の真実なので、そこから読む。
+    """
+    record = (
+        db.query(LoginBonus)
+        .filter(LoginBonus.user_id == user_id, LoginBonus.bonus_date == bonus_date)
+        .first()
+    )
+    return record.points if record else 0
+
+
 def claim(user: User, db: Session, period: str, bonus_date: str) -> dict:
-    """当日ぶんのログインボーナスを受け取る（冪等・並行安全）。
+    """当日ぶんのログインボーナスを受け取る（**冪等**・並行安全）。
 
     処理順序は統括確定仕様どおり厳守する:
       1. `atomic_monthly_reset` で**月替わりを先に通す**
@@ -100,7 +115,16 @@ def claim(user: User, db: Session, period: str, bonus_date: str) -> dict:
 
     **累計pt加算・ランク再計算は行わない**（統括確定仕様）。
 
+    【QA_Q-6 M-1 対応・再送安全性の保証】
+    この関数は**何度呼んでも当日の付与は最大1回**である（UNIQUE(user_id, bonus_date) が
+    最後の砦）。したがってクライアントは、応答が取れなかったとき（タイムアウト・通信断）に
+    **安全に再送できる**。再送時は `granted=False` になるが、`points` には
+    **その日に実際に付与された pt** を入れて返すため、フロントは「実は付与されていた」
+    状態を結果画面として復元できる（「UI は失敗・サーバーは成功」で告知が消えるのを防ぐ）。
+
     戻り値: {"granted","points","monthly_points","next_reward","rewards_granted"}
+      - `granted`: **今回の呼び出しで新規付与したか**
+      - `points`: **その日に付与された pt**（`granted=False` でも当日ぶんの実額。未受領なら 0）
     """
     user_id = user.id
 
@@ -120,13 +144,17 @@ def claim(user: User, db: Session, period: str, bonus_date: str) -> dict:
             )
             db.flush()
     except IntegrityError:
-        # 本日は受領済み。ptは足さずに現状の月間ptだけ返す（200＋granted=false）。
+        # 本日は受領済み。ptは足さない（＝再送しても二重付与されない）。
+        # 【M-1 対応】0 ではなく **その日に実際に付与された pt** を返す。これが無いと、
+        # タイムアウト後に再送したクライアントが「いくら入ったのか」を復元できず、
+        # 「UI は失敗・サーバーは成功」のまま結果も特典解放も伝えられなくなる。
         db.refresh(user)
         current_mp = user.monthly_points
+        awarded = awarded_points_of_day(db, user_id, bonus_date)
         db.commit()
         return {
             "granted": False,
-            "points": 0,
+            "points": awarded,
             "monthly_points": current_mp,
             "next_reward": next_reward(current_mp),
             "rewards_granted": [],

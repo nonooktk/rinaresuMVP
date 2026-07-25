@@ -73,6 +73,52 @@ const POINT_COLOR = "#b3306b";
 
 type Step = "greet" | "envelope" | "opening" | "result";
 
+// ---------------------------------------------------------------- claim の発火管理
+
+/**
+ * claim の発火状態を**モジュールスコープ**（＝コンポーネントのマウント外）で保持する。
+ *
+ * 【R-3 M-1 対応】ガードをコンポーネント内の `useRef` だけに置くと、通信完了前に
+ * オーバーレイ（や `/home`）がアンマウント→再マウントされた瞬間に初期化され、
+ * `POST /api/login-bonus/claim` が何度も飛び得る（pt の二重付与は DB の UNIQUE 制約が
+ * 防ぐが、LB-8 ③「二重タップ・連打のガード必須」の意図には届かない）。
+ *
+ * ここでは「1つのボーナス表示機会（`claimKey`）につき」
+ *   - 初回 claim = **最大1リクエスト**（再マウントしても同じ Promise を共有する）
+ *   - 復元のための再送 = **最大1リクエスト**（M-1 の意図した再送だけを許す）
+ * に固定する。これにより「意図した再送」と「事故による多重発火」が構造的に区別される。
+ *
+ * `claimKey` はホーム側がオーバーレイを開くたびに新しく発行するため、翌日以降の
+ * 新しいボーナス機会ではきちんと新規リクエストが飛ぶ（スロットは常に1つだけ保持）。
+ */
+let claimSlot: {
+  key: string;
+  first: Promise<LoginBonusResult>;
+  resend?: Promise<LoginBonusResult>;
+} | null = null;
+
+/** 初回 claim。同じ `claimKey` なら再マウント後も同一リクエストを共有する。 */
+function startClaim(claimKey: string): Promise<LoginBonusResult> {
+  if (!claimSlot || claimSlot.key !== claimKey) {
+    const first = api.claimLoginBonus();
+    // 待ち合わせ前に reject しても未処理拒否にしない（後段で改めて await して捕まえる）
+    first.catch(() => {});
+    claimSlot = { key: claimKey, first };
+  }
+  return claimSlot.first;
+}
+
+/** 復元のための再送。同じ `claimKey` につき最大1回しか実リクエストを発行しない。 */
+function resendClaim(claimKey: string): Promise<LoginBonusResult> {
+  if (!claimSlot || claimSlot.key !== claimKey) return startClaim(claimKey);
+  if (!claimSlot.resend) {
+    const resend = api.claimLoginBonus();
+    resend.catch(() => {});
+    claimSlot.resend = resend;
+  }
+  return claimSlot.resend;
+}
+
 // ---------------------------------------------------------------- SVG パーツ
 
 /** 単一のハート（装飾専用。意味はすべてテキスト側が持つ）。 */
@@ -209,6 +255,11 @@ function EnvelopeSvg({
 interface LoginBonusOverlayProps {
   /** 表示中のユーザー（推しスラッグ・あだ名・active_visual を使う） */
   user: User;
+  /**
+   * このボーナス表示機会を識別するキー（ホームが開くたびに新規発行する）。
+   * claim の発火回数をマウントのライフサイクルから切り離すために使う（R-3 M-1）。
+   */
+  claimKey: string;
   /** 推しの表示名（未解決なら省略可） */
   idolName?: string;
   /** 推しのテーマカラー（封筒のふた・吹き出しの枠・ボタンに使う。文字色には使わない） */
@@ -232,6 +283,7 @@ function detectReducedMotion(): boolean {
 
 export default function LoginBonusOverlay({
   user,
+  claimKey,
   idolName,
   themeColor,
   onFinish,
@@ -239,6 +291,12 @@ export default function LoginBonusOverlay({
 }: LoginBonusOverlayProps) {
   const [step, setStep] = useState<Step>("greet");
   const [result, setResult] = useState<LoginBonusResult | null>(null);
+  // 開封演出（1.2秒）が終わっても API が返ってこないときの待機中フラグ。
+  // true の間はハートの余韻をループさせる（D-3 §4.4・QA_Q-6 m-1）。
+  const [waiting, setWaiting] = useState(false);
+  // タイムアウト後の再送で結果を復元したか（QA_Q-6 M-1）。
+  // true なら `granted=false` でも「受け取れた」として通常の結果表示にする。
+  const [recovered, setRecovered] = useState(false);
   // マウント時に一度だけ判定する（このコンポーネントはクライアント側でのみマウントされる）
   const [reduced] = useState<boolean>(detectReducedMotion);
 
@@ -293,43 +351,112 @@ export default function LoginBonusOverlay({
     [onFinish]
   );
 
-  /** ステップ2: claim を1回だけ発火し、開封演出と足並みをそろえてステップ3へ進む。 */
+  /** 指定ミリ秒待つ（タイマーはアンマウント時にまとめて解除する）。 */
+  const wait = useCallback(
+    (ms: number) =>
+      new Promise<void>((resolve) => {
+        timersRef.current.push(window.setTimeout(resolve, ms));
+      }),
+    []
+  );
+
+  /** 指定ミリ秒で reject するタイマー（`Promise.race` の相方に使う）。 */
+  const rejectAfter = useCallback(
+    (ms: number) =>
+      new Promise<never>((_, reject) => {
+        timersRef.current.push(
+          window.setTimeout(
+            () => reject(new Error("login-bonus claim timeout")),
+            ms
+          )
+        );
+      }),
+    []
+  );
+
+  /**
+   * ステップ2: claim を1回だけ発火し、開封演出と足並みをそろえてステップ3へ進む。
+   *
+   * 【QA_Q-6 M-1 対応】claim がタイムアウト／通信失敗しても、サーバー側では付与が
+   * 成功していることがある。その状態で「受け取れなかった」と閉じてしまうと、pt も
+   * 特典解放の告知も永久に伝えられない。claim は**冪等**（`UNIQUE(user_id, bonus_date)`）
+   * なので、失敗時は **1回だけ再送**して結果を復元する。
+   */
   const openEnvelope = useCallback(async () => {
-    // 【二重タップ・連打ガード】ここを通れるのは一度きり
+    // 【二重タップ・連打ガード（同一マウント内）】ここを通れるのは一度きり
     if (claimedRef.current) return;
     claimedRef.current = true;
     setStep("opening");
 
     // 演出は API の応答を待たずに即開始する（通信が遅い日に「タップしたのに無反応」に
     // ならないため）。ステップ3へ進むのは「演出完了」と「API 完了」の両方が揃ってから。
-    const minDuration = new Promise<void>((resolve) => {
-      timersRef.current.push(
-        window.setTimeout(resolve, reduced ? REDUCED_ANIMATION_MS : OPEN_ANIMATION_MS)
-      );
-    });
-    const timeout = new Promise<never>((_, reject) => {
-      timersRef.current.push(
-        window.setTimeout(
-          () => reject(new Error("login-bonus claim timeout")),
-          CLAIM_TIMEOUT_MS
-        )
-      );
-    });
+    // 【R-3 M-1】実リクエストの発行は startClaim() が claimKey 単位で1回に抑える
+    // （再マウントで初期化されない）。
+    let settled = false;
+    const claimPromise = startClaim(claimKey).then(
+      (r) => {
+        settled = true;
+        return r;
+      },
+      (e) => {
+        settled = true;
+        throw e;
+      }
+    );
+    // 演出待ちの間に reject しても未処理拒否にしない（後段で改めて await して捕まえる）
+    claimPromise.catch(() => {});
+
+    // 開封演出の最短時間。pt 値によらず常に同じ長さ（D-3 §7-1）
+    await wait(reduced ? REDUCED_ANIMATION_MS : OPEN_ANIMATION_MS);
+    if (!aliveRef.current) return;
 
     try {
-      const [claimed] = await Promise.all([
-        Promise.race([api.claimLoginBonus(), timeout]),
-        minDuration,
+      // 【QA_Q-6 m-1 対応】API が演出より遅いときは、ハートの余韻をループさせたまま待つ
+      // （D-3 §4.4。スピナーは出さない）。既に応答済みならループへ入れずそのまま進む。
+      if (!settled) setWaiting(true);
+      const claimed = await Promise.race([
+        claimPromise,
+        rejectAfter(CLAIM_TIMEOUT_MS),
       ]);
       if (!aliveRef.current) return;
+      setWaiting(false);
       setResult(claimed);
       setStep("result");
+      return;
     } catch {
-      // 失敗・3秒超過。ホームは壊さず、トースト＋クローズで復帰させる（D-3 §4.4）
       if (!aliveRef.current) return;
-      onFail();
     }
-  }, [reduced, onFail]);
+
+    // ---- ここから復元（M-1） ----
+    // 1回目の応答が取れなかった。サーバーには届いて付与済みの可能性があるため、
+    // 冪等な claim を **1回だけ** 再送して当日の付与内容を取り直す。
+    // 余韻ループは出したまま（ユーザーから見れば「まだ開封中」）。
+    // 【R-3 M-1】この再送は resendClaim() が claimKey 単位で1リクエストに固定する
+    // ＝「意図した再送」であり、事故による多重発火とは構造的に区別される。
+    try {
+      const restored = await Promise.race([
+        resendClaim(claimKey),
+        rejectAfter(CLAIM_TIMEOUT_MS),
+      ]);
+      if (!aliveRef.current) return;
+      if (restored.points > 0) {
+        // その日ぶんは実際に付与されていた → 通常どおり結果画面へ進める。
+        // `granted` は false（付与したのは1回目）だが、体験としては「受け取れた」が正しい。
+        setWaiting(false);
+        setRecovered(true);
+        setResult(restored);
+        setStep("result");
+        return;
+      }
+    } catch {
+      if (!aliveRef.current) return;
+    }
+
+    // 再送でも復元できなかった＝本当に通信できていない。
+    // ホームは壊さず、トースト＋クローズで復帰させる（D-3 §4.4・LB-10 ④）。
+    setWaiting(false);
+    onFail();
+  }, [claimKey, reduced, onFail, wait, rejectAfter]);
 
   /** 画面タップ・進行ボタンの共通処理。演出中（opening）は何も受け付けない。 */
   const advance = useCallback(() => {
@@ -385,8 +512,12 @@ export default function LoginBonusOverlay({
     ? `${user.nickname}、今日も会いにきてくれてありがとう♡`
     : "今日も会いにきてくれてありがとう♡";
 
-  const granted = result?.granted === true;
   const points = result?.points ?? 0;
+  // 「受け取れた」として通常の結果（pt数値・サブコピー）を出すかどうか。
+  // - 通常系（granted=true）はもちろん出す
+  // - 【M-1】タイムアウト後の再送で復元した場合も、実際に付与されているので出す
+  // - 初回 claim で granted=false（＝別経路で受領済み）のときだけ E-1 の文言にする
+  const granted = (result?.granted === true || recovered) && points > 0;
   const monthlyPoints = result?.monthly_points ?? 0;
   const nextReward = result?.next_reward;
   const stackText =
@@ -536,7 +667,12 @@ export default function LoginBonusOverlay({
                     {FLOATING_HEARTS.map((h, i) => (
                       <span
                         key={i}
-                        className="animate-heart-float absolute"
+                        // 【m-1】API が演出より遅いときは余韻をループさせて待つ（D-3 §4.4）
+                        className={`absolute ${
+                          waiting
+                            ? "animate-heart-float-loop"
+                            : "animate-heart-float"
+                        }`}
                         style={
                           {
                             left: "50%",
