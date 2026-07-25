@@ -24,7 +24,13 @@ import IdolImage from "./IdolImage";
 import Sparkles from "./Sparkles";
 import SpeechBubble from "./SpeechBubble";
 import { api } from "@/lib/api";
-import type { LoginBonusResult, User } from "@/lib/types";
+import {
+  applyNickname,
+  applyPoints,
+  resolveBonusSubcopy,
+  resolveLoginLines,
+} from "@/lib/idolVoice";
+import type { Idol, LoginBonusResult, User } from "@/lib/types";
 
 // ---------------------------------------------------------------- 定数
 
@@ -61,12 +67,10 @@ const FLOATING_HEARTS = [
   { size: 18, color: "#ffa0c4", dx: 50, rot: 16, delay: 360 },
 ] as const;
 
-/** 結果サブコピー（D-3 §3.2）。pt の量に触れず「来てくれたこと」を褒める方向で出し分ける。 */
-const RESULT_SUB_COPY: Record<number, string> = {
-  1: "きょう会えたのが いちばんうれしい♡",
-  5: "ちょっと多めに入れちゃった♪",
-  10: "わっ、今日はとくべつ！ たくさん入れちゃった♡",
-};
+// 文言は lib/idolVoice.ts に外出ししている（DESIGN_D-4 §3）。
+//   ・キャラ別文言（挨拶・封筒・結果・E-1）は API 由来の `idol.login_bonus_lines`
+//   ・pt 別サブコピーは全キャラ共通の中立文体定数（BONUS_SUBCOPY）
+// この2つを **独立に引き当てる**（交差表を作らない）のが D-4 §3.1 の中心的な決定。
 
 /** 次特典アイコン（DESIGN_D-2 §1.3 の対応表と同一）。 */
 const NEXT_REWARD_ICON: Record<string, string> = {
@@ -267,6 +271,11 @@ interface LoginBonusOverlayProps {
    * claim の発火回数をマウントのライフサイクルから切り離すために使う（R-3 M-1）。
    */
   claimKey: string;
+  /**
+   * 表示中の推し（キャラ別文言 `login_bonus_lines` の引き当てに使う。DESIGN_D-4 §3）。
+   * 未解決・文言未登録の slug では `DEFAULT_LOGIN_LINES` に落ちる。
+   */
+  idol?: Idol | null;
   /** 推しの表示名（未解決なら省略可） */
   idolName?: string;
   /** 推しのテーマカラー（封筒のふた・吹き出しの枠・ボタンに使う。文字色には使わない） */
@@ -309,6 +318,7 @@ function detectReducedMotion(): boolean {
 export default function LoginBonusOverlay({
   user,
   claimKey,
+  idol,
   idolName,
   themeColor,
   onClaimStart,
@@ -579,9 +589,10 @@ export default function LoginBonusOverlay({
 
   // ---------- 表示用の値 ----------
 
-  const greeting = user.nickname
-    ? `${user.nickname}、今日も会いにきてくれてありがとう♡`
-    : "今日も会いにきてくれてありがとう♡";
+  // 【DESIGN_D-4 §3】キャラ別文言の引き当て。slug で分岐せず、未登録なら DEFAULT に落ちる。
+  const lines = resolveLoginLines(idol);
+  // あだ名が取れない場合は greet1 の先頭「{nickname}、」ごと落とす（D-3 §3.1 1-1）
+  const greeting = applyNickname(lines.greet1, user.nickname);
 
   const points = result?.points ?? 0;
   // 「受け取れた」として通常の結果（pt数値・サブコピー）を出すかどうか。
@@ -654,7 +665,7 @@ export default function LoginBonusOverlay({
                   <span id="lb-title">
                     {greeting}
                     <br />
-                    私からの気持ち、受け取ってね！
+                    {lines.greet2}
                   </span>
                 </SpeechBubble>
               </div>
@@ -694,7 +705,7 @@ export default function LoginBonusOverlay({
             <>
               <div className="mb-4 w-full px-2">
                 <SpeechBubble themeColor={theme}>
-                  <span id="lb-title">はい、これ。あけてみて…♡</span>
+                  <span id="lb-title">{lines.envelope}</span>
                 </SpeechBubble>
               </div>
               <IdolImage
@@ -793,16 +804,12 @@ export default function LoginBonusOverlay({
                     <span id="lb-title">
                       {granted ? (
                         <>
-                          {points}ptをゲットしたよ！
+                          {applyPoints(lines.result1, points)}
                           <br />
-                          また明日も会いにきてね！
+                          {lines.result2}
                         </>
                       ) : (
-                        <>
-                          今日のぶんは もう受け取ってるみたい…！
-                          <br />
-                          また明日ね♡
-                        </>
+                        lines.already
                       )}
                     </span>
                   </SpeechBubble>
@@ -819,7 +826,7 @@ export default function LoginBonusOverlay({
                       {points}pt
                     </p>
                     <p className="mt-3 text-[13px] text-[var(--ink)]">
-                      {RESULT_SUB_COPY[points] ?? "うけとってくれて ありがとう♡"}
+                      {resolveBonusSubcopy(points)}
                     </p>
                   </>
                 )}

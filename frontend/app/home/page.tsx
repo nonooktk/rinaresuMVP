@@ -506,6 +506,9 @@ export default function HomePage() {
         <LoginBonusOverlay
           user={user}
           claimKey={loginBonusKey}
+          // キャラ別ログボ文言（idol.login_bonus_lines）の引き当てに使う（DESIGN_D-4 §3）。
+          // ホームは既に getIdols() / getLimitedIdol() で idol を解決済みなので追加取得はしない。
+          idol={idol}
           idolName={idol?.name}
           themeColor={theme}
           onClaimStart={handleLoginBonusClaimStart}

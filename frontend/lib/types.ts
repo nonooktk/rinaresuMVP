@@ -1,11 +1,25 @@
 // りなれす 型定義（API契約に対応）
 
+// 毎日ログインボーナスのキャラ別文言（DESIGN_D-4 §3.2）。
+// pt には一切依存しない（pt 別サブコピーは lib/idolVoice.ts の BONUS_SUBCOPY 側）。
+export interface LoginBonusLines {
+  greet1: string; // ステップ1・1行目（"{nickname}、" で始まる）
+  greet2: string; // ステップ1・2行目（一人称を含む）
+  envelope: string; // ステップ2・吹き出し
+  result1: string; // ステップ3・1行目（"{points}" を含む）
+  result2: string; // ステップ3・2行目（明日への接続）
+  already: string; // E-1（本日受領済み）
+}
+
 // アイドル情報
 export interface Idol {
   id: string;
   name: string;
   theme_color: string; // テーマカラー（例 #ff87b2）
   catchphrase: string;
+  // キャラ別ログボ文言（後方互換の任意フィールド）。
+  // 未登録 slug では null／欠落し、フロントは DEFAULT_LOGIN_LINES に落ちる。
+  login_bonus_lines?: LoginBonusLines | null;
 }
 
 // 次に狙う特典（月間ptに対する到達目標）

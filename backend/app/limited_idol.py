@@ -8,7 +8,14 @@
     1. LIMITED_IDOL["id"]（slug）・name・theme_color・catchphrase を今月の限定推しに書き換える
     2. frontend/public/idols/{新slug}/main.png に立ち絵（背景透過PNG）を配置する
        （特殊ビジュアルと同様、ファイルを置くだけ。IdolImage 経由で表示される）
-    3. バックエンドを再起動する（seed が idols テーブルへ upsert する）
+    3. **★任意** LIMITED_IDOL["comments"]（ホーム吹き出し・ランク→3文）と
+       LIMITED_IDOL["login_lines"]（ログインボーナス文言・5フィールド）を新キャラぶんに書き換える。
+       口調の書き方は DESIGN_D-4 §1 のキャラ定義フォーマットに従う。
+       **省略した場合**: 吹き出しは限定推し用の中立9文、ログボは DEFAULT_LOGIN_LINES に落ちる
+       （どちらも画面は壊れない。DESIGN_D-4 §6.2 原則2・§6.3）
+    4. **★任意** backend/app/services/ai.py の IDOL_PERSONAS に新 slug を追加する
+       （FAQ・シェア文面の口調。未追加なら DEFAULT_PERSONA に落ちる）
+    5. バックエンドを再起動する（seed が idols / idol_comments / idol_login_lines へ upsert する）
   ※ slug を月ごとに変えると idols テーブルに過去の限定推し行が残るが、
     いずれも is_limited=True で通常一覧には出ないため問題ない。
     先月の限定推しを選択していたユーザーは、月替わりの遅延リセットで
@@ -23,9 +30,43 @@ backend/app/routers/idols.py（GET /api/idols/limited）から参照される。
 # id はスラッグ。frontend/public/idols/{id}/ の立ち絵ディレクトリと対応する。
 # 2026-07-23: 正式アセット差し替え（統括承認済み）。旧プレースホルダー seira は
 # 互換のため idols テーブル行・アセットを残置（削除しない）。
-LIMITED_IDOL: dict[str, str] = {
+LIMITED_IDOL: dict = {
     "id": "rinaresu",
     "name": "眼鏡爆美女りなれす",
     "theme_color": "#c2517d",  # ローズピンク
     "catchphrase": "メガネの奥から、キミにロックオン♪",
+    # ---------- ホームの吹き出し（ランク→3文・DESIGN_D-4 §2.8） ----------
+    # 【DESIGN_D-4 §6.2 原則3】限定推しの差し替え箇所を1ファイルに寄せるため、
+    # 文言もこの定数に同居させる。**このキーが無い／空の場合は限定推し用の中立9文に
+    # フォールバック**するため、文言を用意し忘れても画面は壊れない（§6.2 原則2）。
+    #
+    # 眼鏡爆美女りなれす: 一人称「りなれす」／二人称 {nickname}（文中は「キミ」可）／
+    # 語尾 〜だよ♪ 〜ね 〜なの／♪ 可・♡ 不可／ピント・ロックオン・視界の語彙。
+    "comments": {
+        1: [
+            "{nickname}、はじめまして♪ メガネの奥から、しっかりロックオン",
+            "{nickname}が来た瞬間、ピントがぴたっと合った気がするの",
+            "{nickname}、登録ありがと♪ その一台、りなれすが見ててあげる",
+        ],
+        2: [
+            "{nickname}、いつもありがと♪ キミのこと、ちゃんと見えてるよ",
+            "{nickname}のペース、りなれすはけっこう好きだよ♪",
+            "{nickname}、今月もよく集めたね♪ さすが、りなれすの相棒",
+        ],
+        3: [
+            "{nickname}、大好き♪ この距離までピント合わせたの、キミだけ",
+            "{nickname}となら、もっと遠くまで見に行けそうな気がするの",
+            "{nickname}はりなれすの特等席。そこから動かないでね♪",
+        ],
+    },
+    # ---------- 毎日ログインボーナスの文言（DESIGN_D-4 §3.3） ----------
+    # 未設定なら DEFAULT_LOGIN_LINES（＝ DESIGN_D-3 の原文）に落ちる。
+    "login_lines": {
+        "greet1": "{nickname}、今日も会いにきてくれてありがとう♪",
+        "greet2": "りなれすの気持ち、受け取ってね",
+        "envelope": "はい、これ。あけてみて…♪",
+        "result1": "{points}ptをゲットだよ♪",
+        "result2": "また明日も、キミを待ってるね",
+        "already": "今日のぶんは もう渡したあとみたい…♪ また明日ね",
+    },
 }

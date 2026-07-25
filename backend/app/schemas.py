@@ -9,6 +9,22 @@ from pydantic import BaseModel, ConfigDict
 
 
 # ---------- Idol ----------
+class LoginBonusLines(BaseModel):
+    """毎日ログインボーナスのキャラ別文言（DESIGN_D-4 §3.2）。
+
+    **pt には一切依存しない**（pt 別のサブコピーはキャラ非依存でフロントが持つ）。
+    `greet1` は `{nickname}`、`result1` は `{points}` のプレースホルダーを含む。
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    greet1: str      # ステップ1・1行目（"{nickname}、" で始まる）
+    greet2: str      # ステップ1・2行目（一人称を含む）
+    envelope: str    # ステップ2・吹き出し
+    result1: str     # ステップ3・1行目（"{points}" を含む）
+    result2: str     # ステップ3・2行目（明日への接続）
+    already: str     # E-1（本日受領済み）
+
+
 class IdolOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -17,6 +33,10 @@ class IdolOut(BaseModel):
     name: str
     theme_color: str
     catchphrase: str
+    # 毎日ログインボーナスのキャラ別文言（新規・**後方互換の追加のみ**）。
+    # 未登録の slug では None になり、フロントは DEFAULT_LOGIN_LINES に落ちる。
+    # ホームは既に GET /api/idols を呼んでいるため、追加リクエストは発生しない。
+    login_bonus_lines: LoginBonusLines | None = None
 
 
 # ---------- User ----------
