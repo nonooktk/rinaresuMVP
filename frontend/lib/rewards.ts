@@ -5,6 +5,15 @@
 
 import type { RewardGranted, RewardsStatus } from "./types";
 
+/**
+ * 差分から復元する握手会抽選券の列挙上限（SECURITY_REPORT_2026-07-26 F-3）。
+ *
+ * 差分の基準は localStorage のスナップショットなので、改竄されれば任意の値になりうる。
+ * 上限が無いと巨大な差分で列挙が止まらず自タブが固まる。実運用で1回の処理に
+ * 跨る T3（1000ptごと）は多くても数枚なので、10 で十分な余裕がある。
+ */
+const MAX_DIFF_TICKETS = 10;
+
 // 指定インスタント（既定は現在時刻）を JST の暦要素（年・月・日）に分解する。
 // Intl で timeZone を Asia/Tokyo に固定するため、実行環境のローカルTZに依存しない。
 function jstYmd(now: Date): { year: number; month: number; day: number } {
@@ -63,6 +72,11 @@ export function diffGrantedRewards(
   if (!before || !after) return [];
 
   const granted: RewardGranted[] = [];
+  /** 枚数として妥当な整数へ丸める（NaN・Infinity・負値・非数値を 0 に落とす） */
+  const asCount = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(Math.trunc(value), 0)
+      : 0;
 
   if (!before.limited_idol_active && after.limited_idol_active) {
     granted.push({
@@ -80,8 +94,17 @@ export function diffGrantedRewards(
       label: "特殊ビジュアル",
     });
   }
-  // 抽選券は積み上げ式。増えた枚数だけ列挙する（1回の処理で複数枚増えることがある）
-  const addedTickets = Math.max((after.tickets ?? 0) - (before.tickets ?? 0), 0);
+  // 抽選券は積み上げ式。増えた枚数だけ列挙する（1回の処理で複数枚増えることがある）。
+  //
+  // 【SECURITY_REPORT_2026-07-26 F-3 対応】スナップショットは localStorage 由来なので、
+  // 改竄されれば `tickets` に巨大な負値も入りうる。素の差分だと列挙が膨大になり
+  // **自タブが固まる**（サーバーは一切動かない自己 DoS）。値を妥当な整数へ丸めたうえで、
+  // 列挙数に上限を設ける。上限を超えても告知は成立する（トーストは件数をまとめ、
+  // ダイアログは上限件数ぶんを列挙する）ので、画面は壊れない。
+  const addedTickets = Math.min(
+    Math.max(asCount(after.tickets) - asCount(before.tickets), 0),
+    MAX_DIFF_TICKETS
+  );
   for (let i = 0; i < addedTickets; i++) {
     granted.push({
       tier: "T3",

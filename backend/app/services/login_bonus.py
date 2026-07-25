@@ -39,6 +39,19 @@ BONUS_POINT_CHOICES: tuple[int, ...] = (1, 5, 10)
 # 将来 1pt の比率を上げる等の調整はここだけを書き換えれば済む（再実装不要）。
 BONUS_POINT_WEIGHTS: tuple[int, ...] = (1, 1, 1)
 
+# 抽選専用の乱数源（**暗号論的**・os.urandom ベース）。
+#
+# 【SECURITY_REPORT_2026-07-26 F-1 対応】標準 `random` のモジュール関数は
+# メルセンヌ・ツイスタの**グローバル状態を共有**しており、同じプロセス内の
+# `GET /api/users/{id}/comment`（`random.choice` でコメントを選ぶ）がその状態を
+# 消費・観測できる。pt という**価値**の抽選に使う乱数を、他機能から観測しうる
+# 予測可能な PRNG に依存させない。
+#
+# `SystemRandom` は `random.Random` のサブクラスなので `choices(weights=...)` が
+# そのまま使え、**重みつき抽選の仕様は一切変わらない**（モジュール定数での調整余地も維持）。
+# 種を持たないため `random.seed()` の影響も受けない。
+_bonus_rng = random.SystemRandom()
+
 
 def current_date_jst(now: datetime | None = None) -> str:
     """現在（または now）の JST 日付を "YYYY-MM-DD" 形式で返す。
@@ -68,8 +81,13 @@ def current_keys_jst(now: datetime | None = None) -> tuple[str, str]:
 
 
 def draw_bonus_points() -> int:
-    """付与pt を抽選する（**サーバー側のみ**。クライアントの申告値は一切使わない）。"""
-    return random.choices(BONUS_POINT_CHOICES, weights=BONUS_POINT_WEIGHTS, k=1)[0]
+    """付与pt を抽選する（**サーバー側のみ**。クライアントの申告値は一切使わない）。
+
+    乱数源は `_bonus_rng`（`random.SystemRandom` ＝ 暗号論的）。重みは
+    `BONUS_POINT_WEIGHTS` をそのまま使うため、重み調整の運用は従来どおり
+    モジュール定数の書き換えだけで済む（SECURITY_REPORT_2026-07-26 F-1）。
+    """
+    return _bonus_rng.choices(BONUS_POINT_CHOICES, weights=BONUS_POINT_WEIGHTS, k=1)[0]
 
 
 def is_available(db: Session, user_id: int, bonus_date: str) -> bool:

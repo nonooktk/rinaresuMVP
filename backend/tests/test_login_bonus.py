@@ -20,6 +20,7 @@ from app.services.login_bonus import (
     BONUS_POINT_CHOICES,
     awarded_points_of_day,
     claim,
+    draw_bonus_points,
     current_date_jst,
     current_keys_jst,
     is_available,
@@ -398,6 +399,60 @@ def test_awarded_points_of_day_helper(db, make_user):
     result = claim(user, db, period, "2026-07-25")
     assert awarded_points_of_day(db, user.id, "2026-07-25") == result["points"]
     assert awarded_points_of_day(db, user.id, "2026-07-26") == 0
+
+
+# ------------------------------------------------- F-1（抽選の乱数源）
+
+
+def test_draw_uses_cryptographic_rng():
+    """F-1: 抽選が暗号論的乱数（SystemRandom）を使う。
+
+    標準 `random` のモジュール関数はメルセンヌ・ツイスタのグローバル状態を共有しており、
+    同一プロセスの `GET /api/users/{id}/comment`（`random.choice`）が状態を消費・観測できる。
+    pt という価値の抽選をそこに依存させない。
+    """
+    import random as _random
+
+    from app.services import login_bonus as lb
+
+    assert isinstance(lb._bonus_rng, _random.SystemRandom)
+
+
+def test_draw_is_not_affected_by_global_random_seed():
+    """F-1: `random.seed()` で固定しても抽選列が再現できない（グローバル状態を共有しない）。
+
+    従来の `random.choices(...)` はモジュール関数＝グローバル状態を使うため、
+    同じ seed から同じ列が出た。SystemRandom は種を持たないので再現できない。
+    """
+    import random as _random
+
+    n = 40  # 偶然一致する確率は (1/3)^40 ＝ 実質ゼロ
+    _random.seed(20260726)
+    first = [draw_bonus_points() for _ in range(n)]
+    _random.seed(20260726)
+    second = [draw_bonus_points() for _ in range(n)]
+
+    assert first != second, "グローバル seed で抽選列が再現できてしまう"
+    assert set(first) | set(second) <= set(BONUS_POINT_CHOICES)
+
+
+def test_draw_still_respects_module_weights(monkeypatch):
+    """F-1: 重みつき抽選の仕様は維持（モジュール定数での調整余地を残す）。"""
+    from app.services import login_bonus as lb
+
+    # 10pt だけに寄せる
+    monkeypatch.setattr(lb, "BONUS_POINT_WEIGHTS", (0, 0, 1))
+    assert {lb.draw_bonus_points() for _ in range(50)} == {10}
+
+    # 1pt だけに寄せる
+    monkeypatch.setattr(lb, "BONUS_POINT_WEIGHTS", (1, 0, 0))
+    assert {lb.draw_bonus_points() for _ in range(50)} == {1}
+
+
+def test_draw_covers_all_choices_with_default_weights():
+    """F-1: 既定の均等重みでは 1/5/10 がすべて出る（かつ他の値は出ない）。"""
+    drawn = {draw_bonus_points() for _ in range(200)}
+    assert drawn == set(BONUS_POINT_CHOICES)
 
 
 def test_is_available_helper(db, make_user):
