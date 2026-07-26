@@ -111,6 +111,17 @@ class IdolComment(Base):
 
     idol: Mapped["Idol"] = relationship(back_populates="comments")
 
+class FaqVariant(Base):
+    """FAQのキャラ別バリアント（faq_entries に対する idol ごとの回答）。"""
+    __tablename__ = "faq_variants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    faq_entry_id: Mapped[int] = mapped_column(ForeignKey("faq_entries.id"), nullable=False, index=True)
+    idol_id: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    answer: Mapped[str] = mapped_column(String(1000), nullable=False)  # {nickname} プレースホルダを含む
+    generated_by: Mapped[str] = mapped_column(String(20), nullable=False, default="seed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
 
 class FaqEntry(Base):
     """FAQボット用の質問回答エントリ。"""

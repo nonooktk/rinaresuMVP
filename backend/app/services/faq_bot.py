@@ -7,7 +7,7 @@ Azure OpenAI（gpt-4o）が使える場合は、りなれすの概要・FAQ全�
 """
 from sqlalchemy.orm import Session
 
-from app.models import DeviceType, FaqEntry, User
+from app.models import DeviceType, FaqEntry, FaqVariant, User
 from app.services.ai import get_deployment, get_idol_persona, get_openai_client
 
 # マッチしなかった場合の誘導文（{nickname}置換対応）
@@ -30,13 +30,28 @@ APP_OVERVIEW = (
 )
 
 
-def _build_faq_reference(db: Session) -> str:
-    """seed の FAQ 全件を「Q: … / A: …」形式の参照テキストにまとめる。"""
+def _build_faq_reference(db: Session, idol_id: str | None = None) -> str:
+    """
+    seed の FAQ 全件を「Q: … / A: …」形式の参照テキストにまとめる。
+    idol_id が指定されていれば、そのアイドル用の variant があればそちらを
+    優先して参照テキストに含める（AI にキャラ版 FAQ を参照させる目的）。
+    """
     entries = db.query(FaqEntry).all()
     lines = []
     for e in entries:
+        # idol_id に対応する variant があれば優先して参照テキストに載せる
+        var_text = None
+        if idol_id:
+            fv = (
+                db.query(FaqVariant)
+                .filter(FaqVariant.faq_entry_id == e.id, FaqVariant.idol_id == idol_id)
+                .first()
+            )
+            if fv:
+                var_text = fv.answer
         # answer 内の {nickname} は口調に紛れないよう素の参照として残す
-        lines.append(f"Q: {e.question}\nA: {e.answer}")
+        answer_text = var_text if var_text is not None else e.answer
+        lines.append(f"Q: {e.question}\nA: {answer_text}")
     return "\n\n".join(lines)
 
 
@@ -68,6 +83,17 @@ def _keyword_match(question: str, db: Session, user: User | None) -> tuple[str, 
     if best_entry is None or best_match_count == 0:
         return FALLBACK_ANSWER, False
 
+    # ユーザーがいる場合、該当 idol の variant があれば優先して返す
+    if user is not None:
+        variant = (
+            db.query(FaqVariant)
+            .filter(FaqVariant.faq_entry_id == best_entry.id, FaqVariant.idol_id == user.idol_id)
+            .first()
+        )
+        if variant:
+            return variant.answer.replace("{nickname}", nickname), True
+
+    # なければ代表の answer を返す
     answer = best_entry.answer.replace("{nickname}", nickname)
     return answer, True
 
@@ -88,7 +114,8 @@ def _answer_with_openai(
             "推しアイドルはまだ選ばれていないので、中立で丁寧なやさしい口調で回答してください。"
         )
 
-    faq_reference = _build_faq_reference(db)
+    # ユーザーがいる場合はその idol_id に紐づく variant を FAQ 参照に含める
+    faq_reference = _build_faq_reference(db, idol_id=user.idol_id if user is not None else None)
 
     device_reference = _build_device_type_reference(db)
 
