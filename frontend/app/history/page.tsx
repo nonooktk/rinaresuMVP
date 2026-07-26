@@ -9,32 +9,18 @@ import ScreenFrame from "@/components/ScreenFrame";
 import StatusBadge from "@/components/StatusBadge";
 import GameDialog from "@/components/GameDialog";
 import GameButton from "@/components/GameButton";
+import RewardDialog, { rewardsToastMessage } from "@/components/RewardDialog";
 import { useToast } from "@/components/Toast";
 import { api, mediaUrl } from "@/lib/api";
-import { getStoredUser, storeUser } from "@/lib/session";
+import {
+  getStoredUser,
+  rebasePendingLoginBonus,
+  storeUser,
+} from "@/lib/session";
 import type { Device, RewardGranted, Shipment } from "@/lib/types";
 
-// 付与特典（複数可）を1つにまとめたトースト文面を作る（D-1 §3.1）。
-function rewardsToastMessage(granted: RewardGranted[]): string {
-  if (granted.length === 1) {
-    const type = granted[0].reward_type;
-    if (type === "limited_idol") return "期間限定推しが解放されたよ！";
-    if (type === "special_visual") return "特殊ビジュアルをゲットしたよ！";
-    return "握手会の抽選券をゲット！";
-  }
-  return `特典を${granted.length}個ゲット！ 詳しくはダイアログをチェック`;
-}
-
-// 特典種別ごとの達成ダイアログ用の説明（アイコン＋名称＋一言）。
-function rewardDialogLine(g: RewardGranted): { icon: string; note: string } {
-  if (g.reward_type === "limited_idol") {
-    return { icon: "🌸", note: "今月いっぱい /oshi で選べるよ" };
-  }
-  if (g.reward_type === "special_visual") {
-    return { icon: "✨", note: "ホームからいつでも切り替えられるよ" };
-  }
-  return { icon: "🎫", note: "抽選の権利がたまっていくよ" };
-}
+// 達成演出（トースト文面・達成ダイアログ）は components/RewardDialog.tsx へ切り出し、
+// 毎日ログインボーナス（LoginBonusOverlay 後の接続）と共用している（LB-7）。
 
 type Tab = "devices" | "shipments";
 
@@ -132,6 +118,14 @@ export default function HistoryPage() {
         try {
           const latest = await api.getUser(stored.id);
           storeUser(latest);
+          // 【QA_Q-6 N-1】検収で解放された特典は、この画面で告知する。
+          // ログインボーナスの「結果を確認できなかった claim」の持ち越しが残っていると、
+          // 次のホーム表示でこの特典まで差分で拾って二重告知になるため、基準を進めておく。
+          rebasePendingLoginBonus(
+            latest.id,
+            latest.monthly_points ?? 0,
+            latest.rewards ?? null
+          );
           // ランクが上がった場合はお祝いトースト
           if (latest.rank > stored.rank) {
             show(
@@ -415,31 +409,12 @@ export default function HistoryPage() {
         ポイントが反映されるよ✨
       </GameDialog>
 
-      {/* 特典達成演出ダイアログ（rewards_granted があるとき） */}
-      <GameDialog
-        open={grantedRewards !== null && grantedRewards.length > 0}
-        title="とくてん げっとだよ！"
-        hideCancel
-        confirmLabel="うれしい！"
-        onConfirm={closeRewardDialog}
-        onCancel={closeRewardDialog}
-      >
-        <div className="flex flex-col gap-3 text-left">
-          {(grantedRewards ?? []).map((g, i) => {
-            const line = rewardDialogLine(g);
-            return (
-              <div key={`${g.tier}-${g.threshold}-${i}`}>
-                <p className="font-bold text-[var(--ink)]">
-                  {line.icon} {g.label} をゲット！
-                </p>
-                <p className="text-[12px] text-[var(--ink-soft)]">
-                  {line.note}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      </GameDialog>
+      {/* 特典達成演出ダイアログ（rewards_granted があるとき）。LB-7 で共用化 */}
+      <RewardDialog
+        open={grantedRewards !== null}
+        granted={grantedRewards ?? []}
+        onClose={closeRewardDialog}
+      />
 
       {/* シェア投稿ダイアログ */}
       <GameDialog

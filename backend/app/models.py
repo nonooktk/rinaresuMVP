@@ -38,6 +38,11 @@ class Idol(Base):
 
     users: Mapped[list["User"]] = relationship(back_populates="idol")
     comments: Mapped[list["IdolComment"]] = relationship(back_populates="idol")
+    # 毎日ログインボーナスのキャラ別文言（1アイドル1行・DESIGN_D-4 §3）。
+    # 一覧取得（GET /api/idols）で N+1 にならないよう selectin で先読みする。
+    login_bonus_lines: Mapped["IdolLoginLine | None"] = relationship(
+        back_populates="idol", uselist=False, lazy="selectin"
+    )
 
 
 class User(Base):
@@ -132,6 +137,40 @@ class IdolComment(Base):
     idol: Mapped["Idol"] = relationship(back_populates="comments")
 
 
+class IdolLoginLine(Base):
+    """毎日ログインボーナスのキャラ別文言（1アイドル1行）。DESIGN_D-4 §3。
+
+    **キャラ軸と pt 軸を交差させない**のがこの設計の要点（D-4 §3.1）。
+    ここに置くのは「キャラ別・pt 非依存」の5フィールドだけで、pt 別のサブコピー
+    （1/5/10）はキャラ非依存の定数としてフロント側に持つ。両者は独立に引き当てるため、
+    キャラが1人増えても +1行、pt 帯が増えても +1文で済み、7×3 の交差表は存在しない。
+
+    - `greet1`  : ステップ1・吹き出し1行目。**必ず "{nickname}、" で始める**
+      （あだ名が無いときは先頭の "{nickname}、" を落とすだけでフォールバックできる形）
+    - `greet2`  : ステップ1・吹き出し2行目。**一人称を必ず含める**
+    - `envelope`: ステップ2・吹き出し（差し出す所作）
+    - `result1` : ステップ3・1行目。**"{points}" を含む**
+    - `result2` : ステップ3・2行目（明日への接続）
+    - `already` : E-1（本日受領済み）の文言
+
+    文言が未登録の slug は、フロント側の `DEFAULT_LOGIN_LINES` に落ちる
+    （限定推しは月替わりで slug ごと差し替わるため、未定義でも画面が壊れないことが前提）。
+    新規テーブルのため `create_all` で作成され、`app/migrate.py` への ALTER 追加は不要。
+    """
+    __tablename__ = "idol_login_lines"
+
+    # 1アイドル1行のため idol_id をそのまま主キーにする（自然キー＝upsert が容易）
+    idol_id: Mapped[str] = mapped_column(ForeignKey("idols.id"), primary_key=True)
+    greet1: Mapped[str] = mapped_column(String(200), nullable=False)
+    greet2: Mapped[str] = mapped_column(String(200), nullable=False)
+    envelope: Mapped[str] = mapped_column(String(200), nullable=False)
+    result1: Mapped[str] = mapped_column(String(200), nullable=False)
+    result2: Mapped[str] = mapped_column(String(200), nullable=False)
+    already: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    idol: Mapped["Idol"] = relationship(back_populates="login_bonus_lines")
+
+
 class FaqEntry(Base):
     """FAQボット用の質問回答エントリ。"""
     __tablename__ = "faq_entries"
@@ -174,3 +213,33 @@ class UserReward(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     user: Mapped["User"] = relationship(back_populates="rewards")
+
+
+class LoginBonus(Base):
+    """毎日ログインボーナスの受領履歴（1レコード＝1ユーザー1日分）。
+
+    その日（JST）の初回ホーム表示で 1pt / 5pt / 10pt のいずれかを月間ptへ付与し、
+    その事実をこのテーブルに1行だけ残す。
+
+    - bonus_date: 付与対象日（"YYYY-MM-DD"・**JST基準**）。
+      JST 文字列で持つことで、DB のタイムゾーン設定（SQLite/PostgreSQL）に依存せず
+      「その日に受け取ったか」を一意に判定できる。
+    - points: 実際に付与した pt（1 / 5 / 10）。抽選はサーバー側のみで行う。
+
+    **UNIQUE(user_id, bonus_date) が多重付与防止の最後の砦**。アプリ側の事前チェックは
+    並行リクエストをすり抜けるため、DB 制約で「1ユーザー1日1回」を保証する
+    （INSERT は savepoint で隔離し、IntegrityError＝本日受領済みとして扱う）。
+
+    新規テーブルのため `Base.metadata.create_all()` で作成される。
+    既存テーブルへの列追加ではないので `app/migrate.py` への ALTER 追加は不要。
+    """
+    __tablename__ = "login_bonuses"
+    __table_args__ = (
+        UniqueConstraint("user_id", "bonus_date", name="uq_login_bonus_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    bonus_date: Mapped[str] = mapped_column(String(10), nullable=False)  # "YYYY-MM-DD"（JST）
+    points: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

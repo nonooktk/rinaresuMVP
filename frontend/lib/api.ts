@@ -15,6 +15,7 @@ import type {
   GoogleAuthResult,
   HistoryResult,
   Idol,
+  LoginBonusResult,
   ReceiveResult,
   ShareText,
   Shipment,
@@ -206,4 +207,10 @@ export const api = {
   // 14. FAQ質問
   askFaq: (question: string) =>
     request<FaqAnswer>("/api/faq/ask", jsonInit({ question })),
+
+  // 15. 毎日ログインボーナスの受け取り。
+  //     **ボディなし**（付与pt も user_id も送らない）。抽選はサーバー側で行われ、
+  //     対象は通行証から解決された本人のみ。本日受領済みでも 200＋granted=false が返る。
+  claimLoginBonus: () =>
+    request<LoginBonusResult>("/api/login-bonus/claim", { method: "POST" }),
 };

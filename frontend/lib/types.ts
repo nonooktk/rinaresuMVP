@@ -1,11 +1,25 @@
 // りなれす 型定義（API契約に対応）
 
+// 毎日ログインボーナスのキャラ別文言（DESIGN_D-4 §3.2）。
+// pt には一切依存しない（pt 別サブコピーは lib/idolVoice.ts の BONUS_SUBCOPY 側）。
+export interface LoginBonusLines {
+  greet1: string; // ステップ1・1行目（"{nickname}、" で始まる）
+  greet2: string; // ステップ1・2行目（一人称を含む）
+  envelope: string; // ステップ2・吹き出し
+  result1: string; // ステップ3・1行目（"{points}" を含む）
+  result2: string; // ステップ3・2行目（明日への接続）
+  already: string; // E-1（本日受領済み）
+}
+
 // アイドル情報
 export interface Idol {
   id: string;
   name: string;
   theme_color: string; // テーマカラー（例 #ff87b2）
   catchphrase: string;
+  // キャラ別ログボ文言（後方互換の任意フィールド）。
+  // 未登録 slug では null／欠落し、フロントは DEFAULT_LOGIN_LINES に落ちる。
+  login_bonus_lines?: LoginBonusLines | null;
 }
 
 // 次に狙う特典（月間ptに対する到達目標）
@@ -39,6 +53,9 @@ export interface User {
   active_visual?: string; // "main" / "special"
   next_reward?: NextReward | null; // 次に狙う特典（詳細レスポンスのみ）
   rewards?: RewardsStatus; // 特典保有状況（詳細レスポンスのみ）
+  // 当日（JST）ぶんの毎日ログインボーナスが未受領なら true（詳細レスポンスのみ）。
+  // ホームはこの1フィールドだけでオーバーレイの表示要否を判断する。
+  login_bonus_available?: boolean;
 }
 
 // POST /api/auth/google のレスポンス
@@ -136,6 +153,15 @@ export interface ReceiveResult {
   new_rank: number;
   monthly_points?: number; // 受領後の当月月間pt（後方互換の任意フィールド）
   rewards_granted?: RewardGranted[]; // この受領で新規付与された特典（無ければ空）
+}
+
+// POST /api/login-bonus/claim のレスポンス（毎日ログインボーナス）
+export interface LoginBonusResult {
+  granted: boolean; // 今回付与できたか（false = 本日受領済み）
+  points: number; // 今回付与された pt（1 / 5 / 10。granted=false なら 0）
+  monthly_points: number; // 付与後の当月月間pt（積み上げ表示に使う）
+  next_reward?: NextReward | null; // 次に狙う特典（積み上げ表示に使う）
+  rewards_granted?: RewardGranted[]; // この付与で新規獲得した特典（閾値跨ぎ）
 }
 
 // シェア投稿文面

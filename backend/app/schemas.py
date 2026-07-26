@@ -9,6 +9,22 @@ from pydantic import BaseModel, ConfigDict
 
 
 # ---------- Idol ----------
+class LoginBonusLines(BaseModel):
+    """毎日ログインボーナスのキャラ別文言（DESIGN_D-4 §3.2）。
+
+    **pt には一切依存しない**（pt 別のサブコピーはキャラ非依存でフロントが持つ）。
+    `greet1` は `{nickname}`、`result1` は `{points}` のプレースホルダーを含む。
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    greet1: str      # ステップ1・1行目（"{nickname}、" で始まる）
+    greet2: str      # ステップ1・2行目（一人称を含む）
+    envelope: str    # ステップ2・吹き出し
+    result1: str     # ステップ3・1行目（"{points}" を含む）
+    result2: str     # ステップ3・2行目（明日への接続）
+    already: str     # E-1（本日受領済み）
+
+
 class IdolOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -17,6 +33,10 @@ class IdolOut(BaseModel):
     name: str
     theme_color: str
     catchphrase: str
+    # 毎日ログインボーナスのキャラ別文言（新規・**後方互換の追加のみ**）。
+    # 未登録の slug では None になり、フロントは DEFAULT_LOGIN_LINES に落ちる。
+    # ホームは既に GET /api/idols を呼んでいるため、追加リクエストは発生しない。
+    login_bonus_lines: LoginBonusLines | None = None
 
 
 # ---------- User ----------
@@ -70,6 +90,10 @@ class UserDetailOut(UserOut):
     """GET /api/users/{id} 用。UserOut に特典の集計情報を足した詳細レスポンス。"""
     next_reward: NextReward | None = None
     rewards: RewardsStatus
+    # 毎日ログインボーナス（新規・**後方互換の追加のみ**）。
+    # 当日（JST）ぶんが未受領なら True。ホームはこの1フィールドだけで
+    # オーバーレイの表示要否を判断できる（専用 GET を増やさずリクエスト数を抑える）。
+    login_bonus_available: bool = False
 
 
 # ---------- Auth（Google 認証） ----------
@@ -210,3 +234,21 @@ class ReceiveResult(BaseModel):
     # ---------- pt特典プログラム（新規・後方互換の追加のみ） ----------
     monthly_points: int = 0                          # 受領後の当月月間pt
     rewards_granted: list[RewardGranted] = []        # この受領で新規付与された特典
+
+
+# ---------- 毎日ログインボーナス ----------
+class LoginBonusClaimOut(BaseModel):
+    """POST /api/login-bonus/claim のレスポンス。
+
+    リクエストボディは無い（pt も user_id も受け取らない＝抽選はサーバー側のみ・
+    対象は通行証から解決した本人のみ）。本日受領済みでもエラーにはせず
+    200＋`granted=false` を返す。
+
+    **この API は冪等**。応答が取れなかったクライアントは安全に再送でき、再送時は
+    `granted=false` ＋ `points`＝その日に実際に付与された pt が返る（QA_Q-6 M-1 対応）。
+    """
+    granted: bool                                    # **今回の呼び出しで**新規付与したか（false=本日受領済み）
+    points: int = 0                                  # **その日に付与された pt**（granted=false でも実額。未受領なら 0）
+    monthly_points: int = 0                          # 付与後の当月月間pt
+    next_reward: NextReward | None = None            # 次に狙う特典（積み上げ表示用）
+    rewards_granted: list[RewardGranted] = []        # この付与で新規獲得した特典（閾値跨ぎ）

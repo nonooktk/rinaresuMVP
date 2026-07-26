@@ -3,6 +3,17 @@
 // ここではその「当月末までの残り日数」を JST 固定で算出する。
 // 注意: あくまで表示専用。サーバーのリセット判定には使わない（クライアント時計依存を許容する前提）。
 
+import type { RewardGranted, RewardsStatus } from "./types";
+
+/**
+ * 差分から復元する握手会抽選券の列挙上限（SECURITY_REPORT_2026-07-26 F-3）。
+ *
+ * 差分の基準は localStorage のスナップショットなので、改竄されれば任意の値になりうる。
+ * 上限が無いと巨大な差分で列挙が止まらず自タブが固まる。実運用で1回の処理に
+ * 跨る T3（1000ptごと）は多くても数枚なので、10 で十分な余裕がある。
+ */
+const MAX_DIFF_TICKETS = 10;
+
 // 指定インスタント（既定は現在時刻）を JST の暦要素（年・月・日）に分解する。
 // Intl で timeZone を Asia/Tokyo に固定するため、実行環境のローカルTZに依存しない。
 function jstYmd(now: Date): { year: number; month: number; day: number } {
@@ -34,4 +45,74 @@ export function daysUntilMonthEndJST(now: Date = new Date()): number {
   // month は 1 始まり。Date.UTC(year, month, 0) = 当月末日（翌月の 0 日目）。
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return Math.max(lastDay - day, 0);
+}
+
+/**
+ * 特典保有状況（`rewards`）の**前後の差分**から「今回新たに解放された特典」を組み立てる。
+ *
+ * 【QA_Q-6 M-1 対応】達成演出に使う `rewards_granted[]` は claim / 受領のレスポンスにしか
+ * 含まれず、`GET /api/users/{id}` からは取れない。そのためレスポンスを取り逃した経路
+ * （claim のタイムアウト・通信断のあとに再取得で復元した場合）では、達成演出を出す材料が
+ * 無くなってしまう。ここでは保有状況のスナップショットを突き合わせて解放を検知し、
+ * 演出に必要な最小限の情報を復元する。
+ *
+ * - あくまで**フォールバック**。レスポンスから `rewards_granted[]` が取れる通常系では使わない。
+ * - `threshold` は保有状況からは特定できないため 0（不明）を入れる。`RewardDialog` /
+ *   `rewardsToastMessage` は `reward_type` と `label` しか使わないため表示に影響しない。
+ *
+ * @param before オーバーレイ（または受領）を開始する直前の保有状況
+ * @param after  処理後に再取得した保有状況
+ * @returns 新たに解放された特典の一覧（無ければ空配列）
+ */
+export function diffGrantedRewards(
+  before: RewardsStatus | null | undefined,
+  after: RewardsStatus | null | undefined
+): RewardGranted[] {
+  // どちらか一方でも取れていなければ「解放された」と断定できない（誤検知を避ける）
+  if (!before || !after) return [];
+
+  const granted: RewardGranted[] = [];
+  /** 枚数として妥当な整数へ丸める（NaN・Infinity・負値・非数値を 0 に落とす） */
+  const asCount = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(Math.trunc(value), 0)
+      : 0;
+
+  if (!before.limited_idol_active && after.limited_idol_active) {
+    granted.push({
+      tier: "T1",
+      threshold: 0,
+      reward_type: "limited_idol",
+      label: "期間限定推し",
+    });
+  }
+  if (!before.special_visual && after.special_visual) {
+    granted.push({
+      tier: "T2",
+      threshold: 0,
+      reward_type: "special_visual",
+      label: "特殊ビジュアル",
+    });
+  }
+  // 抽選券は積み上げ式。増えた枚数だけ列挙する（1回の処理で複数枚増えることがある）。
+  //
+  // 【SECURITY_REPORT_2026-07-26 F-3 対応】スナップショットは localStorage 由来なので、
+  // 改竄されれば `tickets` に巨大な負値も入りうる。素の差分だと列挙が膨大になり
+  // **自タブが固まる**（サーバーは一切動かない自己 DoS）。値を妥当な整数へ丸めたうえで、
+  // 列挙数に上限を設ける。上限を超えても告知は成立する（トーストは件数をまとめ、
+  // ダイアログは上限件数ぶんを列挙する）ので、画面は壊れない。
+  const addedTickets = Math.min(
+    Math.max(asCount(after.tickets) - asCount(before.tickets), 0),
+    MAX_DIFF_TICKETS
+  );
+  for (let i = 0; i < addedTickets; i++) {
+    granted.push({
+      tier: "T3",
+      threshold: 0,
+      reward_type: "handshake_ticket",
+      label: "握手会抽選券",
+    });
+  }
+
+  return granted;
 }
