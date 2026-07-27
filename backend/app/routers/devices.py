@@ -56,7 +56,21 @@ async def classify_device(
         file_bytes, original_name, db
     )
 
-    return ClassifyResult(
+    # 警告フラグ生成
+    warnings = []
+    
+    # 複数台検出の警告
+    if generated_by == "ai" and candidates:
+        confidence_sum = sum(c["confidence"] for c in candidates)
+        # 複数候補の confidence 合計が高い場合は複数台の可能性
+        if len(candidates) > 1 and confidence_sum > 1.5:
+            warnings.append("複数台の端末が検出されました。1台ずつ投稿してください。")
+    
+    # 何も映ってない場合の警告
+    if candidates and candidates[0]["device_type"] == "other":
+        warnings.append("端末が映っていないか判別できませんでした。別の角度から撮影してください。")
+
+    result = ClassifyResult(
         photo_id=saved_filename,
         photo_url=f"/photos/{saved_filename}",
         candidates=[
@@ -70,6 +84,12 @@ async def classify_device(
         ],
         generated_by=generated_by,
     )
+    
+    # warnings を追加（ClassifyResult に warnings フィールドがある場合）
+    if hasattr(result, "warnings"):
+        result.warnings = warnings
+    
+    return result
 
 
 @router.post("/devices", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)

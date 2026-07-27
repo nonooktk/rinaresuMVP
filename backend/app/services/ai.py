@@ -1,84 +1,62 @@
 """
-Azure OpenAI クライアントの共通初期化と、りなれす固有のペルソナ定義。
+OpenAI 公式 API クライアントの初期化と、りなれすの個別ペルソナ設定。
 
-- 環境変数が揃っていれば AzureOpenAI クライアントを返す。未設定なら None を返し、
-  呼び出し側はテンプレ／キーワードマッチのフォールバックに切り替える。
-- 推しアイドルの口調（ペルソナ）は seed.py の名簿・コメント調から起こした簡潔な記述を
-  ここに一元管理し、シェア文面生成（share-text）と FAQ 回答生成の双方から利用する。
-
-環境変数:
-  AZURE_OPENAI_ENDPOINT   例: https://oai-tvmvp-73bb.openai.azure.com/
-  AZURE_OPENAI_API_KEY    Azure OpenAI のキー
-  AZURE_OPENAI_DEPLOYMENT デプロイメント名（既定 "gpt-4o"）
+環境変数が揃っていれば OpenAI クライアントを返す。未設定なら None を返し、
+呼び出し元はテンプレートキーワードのフォールバックに切り替える。
 """
 import os
 
 try:
-    # openai SDK が入っていない環境でも import エラーで全体が落ちないようにする
-    from openai import AzureOpenAI
+    from openai import OpenAI
 except Exception:  # noqa: BLE001
-    AzureOpenAI = None  # type: ignore[assignment]
-
-# Azure OpenAI の安定版 API バージョン
-AZURE_OPENAI_API_VERSION = "2024-10-21"
-
-# 既定のデプロイメント名
-DEFAULT_DEPLOYMENT = "gpt-4o"
-
-
-def get_deployment() -> str:
-    """使用する Azure OpenAI デプロイメント名を返す。"""
-    return os.environ.get("AZURE_OPENAI_DEPLOYMENT", DEFAULT_DEPLOYMENT)
+    OpenAI = None  # type: ignore[assignment]
 
 
 def get_openai_client():
     """
-    Azure OpenAI クライアントを返す。
+    OpenAI クライアントを返す。
 
-    必要な環境変数（エンドポイント・キー）が揃っていない、または
-    openai SDK が未インストールの場合は None を返す（呼び出し側でフォールバック）。
+    必要な環境変数（OPENAI_API_KEY）が揃っていなければ None を返す。
+    呼び出し元はフォールバック処理に切り替える。
     """
-    if AzureOpenAI is None:
+    if OpenAI is None:
         return None
 
-    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
-    api_key = os.environ.get("AZURE_OPENAI_API_KEY")
-    if not endpoint or not api_key:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
         return None
 
     try:
-        return AzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=api_key,
-            api_version=AZURE_OPENAI_API_VERSION,
-        )
+        return OpenAI(api_key=api_key)
     except Exception:  # noqa: BLE001 — 初期化失敗時もフォールバックさせる
         return None
 
 
-# 推しアイドルごとのペルソナ（口調）。seed.py の名簿・キャッチフレーズ・
-# ランク別コメントの語り口から起こした簡潔な記述。プロンプトに埋め込んで口調を再現する。
+def get_deployment() -> str:
+    """使用するモデル名を返す。デフォルトは gpt-4o-mini。"""
+    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
+
+# ペルソナ定義（6地域別）
 IDOL_PERSONAS: dict[str, str] = {
-    "homura": "金城ほむら。金髪ロングの明るい正統派アイドル。"
-    "『♪』を交えた前向きで元気な口調。一人称は「ほむら」。",
-    "minori": "紅谷美野里。赤髪お団子の情熱的なアイドル。"
-    "『〜だよっ！』とテンション高め、まっすぐで熱い口調。一人称は「美野里」。",
-    "shion": "奏多紫苑。銀髪ショートのクールで詩的なアイドル。"
-    "星や夜空にたとえる落ち着いた優しい口調。ふんわり丁寧め。",
-    "miho": "蒼乃美帆。水色サイドポニーの爽やかで透明感のあるアイドル。"
-    "澄んだやわらかい口調で「〜だよ！」と歌うように話す。",
-    "yukari": "桃宮ゆかり。ピンクツインテのあざと可愛い妹系アイドル。"
-    "『〜だよ♪』『ちゅうにゅ〜』など甘えた擬音多めの砕けた口調。一人称は「ゆかりん」。",
-    "ethan": "長岡イーサン。クールな男性アイドル。"
-    "『〜だな』『〜してみないか？』と落ち着いた頼れる口調。丁寧すぎず大人っぽい。",
+    "riji": "リジ・チョー（東京）。明るくノリのいい都会派の陽キャ男子。トレンドと'映え'に敏感で、エコを'おしゃれでイケてる'ものとして推す。テンション高めの盛り上げ役だが、一方で急に冷静な分析を挟むギャップがあり、根は面倒見がいい。",
+    
+    "taka": "タカ・チャーン（栃木）。見た目は勇ましい鷹だが、中身は慎重で心配性の熟考型。丁寧に考えてから話す聞き上手で、相手を気づかう優しさが持ち味。栃木のいちごや日光の自然を愛する。",
+    
+    "kurosuke": "くろすけん（静岡）。寡黙で実直な回収係。多くを語らず'はい'と淡々こなす職人肌で、縁の下の力持ち。富士山とお茶を愛する。信頼感・安心感の担当で、地味だが確実。",
+    
+    "miirin": "みーりん（大阪）。明るくて世話好きな関西の陽キャ姉さん。呼び込み・盛り上げ担当でテンポよくツッコミも入る。人懐っこく親しみやすいムードメーカーで、回収を'めっちゃお得やん！'と前向きに勧める。",
+    
+    "hiroji": "ひろじぃ・ネクスト（京都）。京都の長老然とした物知り。ゆったり間を取って話し、含蓄と小ネタを挟む。中身は最新テックにも精通するギャップ持ちで、伝統と未来をつなぐ案内役。",
+    
+    "teraoman": "テラオーマン（長野）。熱血で頼れる力持ちヒーロー。重い家電も回収BOXも'よいしょ'と担ぐ働き者。まっすぐで面倒見がよく、ユーザーを励ます応援団長。長野の山とりんごを背負う。",
 }
 
-# 名簿にない idol_id 用の中立ペルソナ
-DEFAULT_PERSONA = "りなれすの推しアイドル。明るく親しみやすい応援口調で話す。"
+DEFAULT_PERSONA = "りなれすの推し。元気に自分らしく、親切な返信で話す。"
 
 
 def get_idol_persona(idol_id: str | None) -> str:
-    """idol_id からペルソナ（口調）記述を返す。未知の場合は中立ペルソナ。"""
+    """idol_id からペルソナ（性格・説明）を返す。未定義の場合はデフォルトペルソナ。"""
     if not idol_id:
         return DEFAULT_PERSONA
     return IDOL_PERSONAS.get(idol_id, DEFAULT_PERSONA)

@@ -89,6 +89,8 @@ class ClassifyResult(BaseModel):
     # 判定手段（"ai": gpt-4o Vision / "mock": フォールバック）。
     # フロントは無視して良い後方互換フィールド。
     generated_by: str = "mock"
+    # 警告メッセージ（複数台検出、空白画像など）
+    warnings: list[str] = []
 
 
 class DeviceCreate(BaseModel):

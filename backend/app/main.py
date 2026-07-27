@@ -10,7 +10,7 @@ CORSの許可オリジンは環境変数 CORS_ORIGINS（カンマ区切り）か
 （未設定時は有効。ローカル動作は従来どおり）。
 """
 import os
-
+from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI
@@ -20,6 +20,11 @@ from app.routers import auth, devices, dev, faq, idols, shipments, users
 from app.seed import seed_all
 
 app = FastAPI(title="りなれす API", description="都市鉱山回収促進アプリ りなれす バックエンドAPI")
+
+# .env ファイルを読み込む ← ★ これを追加
+load_dotenv()
+
+app = FastAPI()
 
 # ---------- CORS設定 ----------
 # 環境変数 CORS_ORIGINS をカンマ区切りで受け取り、未設定なら localhost:3000 を既定とする

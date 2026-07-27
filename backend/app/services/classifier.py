@@ -166,10 +166,11 @@ class OpenAIVisionClassifier(DeviceClassifier):
             "【ルール】\n"
             "- 一覧の code のみを使うこと（一覧にない種別名は返さない）。\n"
             "- 可能性が高い順に最大3件、それぞれ確信度(0.0〜1.0)を付けて返す。\n"
+            "- **複数台の端末が写っている場合：** \"multiple_devices\" を true にする。\n"
             "- 端末が写っていない・判別できない場合は "
             "\"other\" を低い確信度で1件だけ返す。\n"
             "- 次のJSON形式のみを出力する（余計な文章は書かない）:\n"
-            '{"candidates": [{"device_type": "<code>", "confidence": <0.0-1.0>}, ...]}'
+            '{"candidates": [{"device_type": "<code>", "confidence": <0.0-1.0>}, ...], "multiple_devices": <true/false>}'
         )
 
     def _parse_candidates(
