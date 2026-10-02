@@ -15,7 +15,7 @@ google-auth==2.56.0
 requests==2.34.2
 # アプリ独自セッション通行証（HS256 JWT）の発行/検証に使用
 # F-4: PyJWT の既知脆弱性（PYSEC-2026-175〜179 等）解消版へ更新
-PyJWT==2.13.0
+PyJWT==2.15.0
 # ローカルの backend/.env を読み込む（本番の実 env は上書きしない）
 # F-4: python-dotenv の脆弱性（PYSEC-2026-2270）解消版へ更新
 python-dotenv==1.2.2
